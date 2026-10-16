@@ -3,6 +3,7 @@
   "src/viewer.tsx",
   "src/ShareMap.tsx",
   "src/MapCanvas.tsx",
+  "src/worker-source.d.ts",
   "src/objectIcons.ts",
   "src/siteGps.ts",
   "src/phoneSensors.ts",

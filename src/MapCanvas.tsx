@@ -5,6 +5,7 @@ import type { WalkingRoute } from './routing';
 import { useEffect, useRef } from 'react';
 import { addReferenceMap, updateReferenceMap, referenceGlyphs } from './referenceMap';
 import * as maplibregl from 'maplibre-gl';
+import workerSource from 'maplibre-gl/dist/maplibre-gl-worker.mjs?raw';
 import type { GeoJSONSource, Map as LibreMap } from 'maplibre-gl';
 import { groundControlRing,groundFromPoints,groundRing,isBoundaryTool,areaKinds,isAreaKind, connectedPathIds, pathOutlineFeatures, moveConnectedPathVertex, gridFeatures, kinds, objectFeatures, objectRing, pathFeatures, type Coord, type EventProject } from './model';
 import type { FeatureCollection, Point } from 'geojson';
@@ -14,6 +15,11 @@ export type ViewerPosition = Pick<GeolocationPosition,'coords'|'timestamp'>;
 export type MapActions = { roadRoute: () => import('./model').SitePath[]; relock: () => void; heading: (heading: number | null) => void; orient: (bearing: number, pitch: number) => void; fit: () => void; zoom: (by: number) => void; north: () => void; locate: (at: Coord, options?: { preserveZoom?: boolean; from?: Coord; pointTowards?: boolean }) => void };
 type Props = { onManualInteraction?: () => void; route?: WalkingRoute | null; onPosition?: (position: ViewerPosition) => void; gps?: boolean; onLocationError?: (message: string) => void; project: EventProject; selected: string | null; tool: string; mode: '2d' | '3d'; reference: boolean; ground:boolean; boundary:boolean; groundVertex:number|null; onGroundSelect:(index:number)=>void; onGroundMove:(index:number,at:Coord)=>void; onGroundInsert:(index:number,at:Coord)=>void; onGroundRemove:(index:number)=>void; grid: boolean; labels: boolean; draft: Coord[]; target: Coord | null; pathVertex: number | null; actions: React.RefObject<MapActions | null>; onConnect: (at:Coord,closeLoop:boolean) => void; onClick: (at: Coord, id?: string) => void; onMove: (id: string, at: Coord) => void; onPathMove: (id: string, index: number, at: Coord) => void; onPathInsert: (id: string, index: number, at: Coord) => void; onPathRemove: (id: string, index: number) => void; onPathBranch: (id:string,index:number) => void; onPathSelect: (id:string,index: number) => void; onCursor: (at: Coord) => void; onError: (s: string) => void };
 const empty: FeatureCollection = { type: 'FeatureCollection', features: [] };
+// Keep the renderer worker bundled, including when a single HTML export is opened offline.
+// MapLibre falls back to a classic worker for file:// pages. Its bundled worker is
+// self-contained; removing only the unused default export supports both worker types.
+const standaloneWorker = workerSource.replace(/export\{\w+ as default\};\s*(?:\/\/# sourceMappingURL=[^\n]*)?\s*$/, '');
+maplibregl.setWorkerUrl(URL.createObjectURL(new Blob([standaloneWorker], { type: 'text/javascript' })));
 
 export default function MapCanvas(props: Props) {
   const el = useRef<HTMLDivElement>(null), mapRef = useRef<LibreMap | null>(null);
