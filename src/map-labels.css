@@ -1,0 +1,19 @@
+.map-label{background:none;border:0;color:#263d2d;display:flex;flex-direction:column;align-items:center;gap:3px;padding:0;max-width:170px}.map-label-icon{display:flex;justify-content:center;align-items:center;min-width:25px;height:25px;font-size:14px;line-height:1;background:#f4f5e7ef;border:1px solid #ffffffb3;box-shadow:0 2px 7px #29472d18;border-radius:6px;font-family:ui-sans-serif,system-ui,sans-serif;color:#314c36}.map-label-name{font-size:10px;font-weight:600;line-height:1.5;background:#f4f5e7ec;border-radius:3px;padding:2px 6px;box-shadow:0 1px 5px #29472d0f;max-width:165px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.map-label.selected .map-label-name{background:#244d31;color:#edffdf}.map-label.selected .map-label-icon{border-color:#274b30;box-shadow:0 0 0 2px #244d3133;background:var(--object-color);cursor:grab}.map-label.selected:active{cursor:grabbing}
+.map-label-safety{z-index:10;gap:4px;--safety-color:#b32235}.map-label-defib{--safety-color:#087440}.map-label-safety .map-label-icon{min-width:96px;height:34px;padding:0 10px;border:2px solid white;border-radius:7px;background:var(--safety-color);color:white;font-size:13px;font-weight:800;letter-spacing:.4px;box-shadow:0 0 0 1px var(--safety-color),0 3px 9px #0005}.map-label-safety .map-label-name{background:white;color:#18271e;border:1px solid var(--safety-color);font-size:12px;font-weight:750;padding:3px 7px;box-shadow:0 2px 6px #0003}.map-label-safety.selected{z-index:11}.map-label-safety.selected .map-label-icon{background:var(--safety-color);border-color:white;box-shadow:0 0 0 3px #14201b,0 3px 9px #0005}.map-label-safety.selected .map-label-name{background:var(--safety-color);color:white}
+
+.map-label-compact .map-label-name{display:none}
+
+.map-label-safety .map-label-icon{gap:6px}.map-label-safety .map-label-icon svg{flex-shrink:0}
+
+.map-label-safety.map-label-displaced::before{content:"";position:absolute;left:50%;bottom:0;width:var(--leader-length);height:2px;background:var(--safety-color);box-shadow:0 0 0 1px white;transform-origin:left center;transform:rotate(var(--leader-angle));z-index:-1;pointer-events:none}
+
+.map-label-defib .map-label-icon{min-width:36px;width:36px;height:36px;padding:5px}.map-label-defib .map-label-icon svg{width:24px;height:24px}.map-label-defib:not(.selected) .map-label-name{display:none}.map-label-combined-aed{display:inline-flex;align-items:center;padding:3px;background:#087440;border:1px solid white;border-radius:4px;margin-left:2px}.map-label-combined-aed svg{width:20px;height:20px}
+.map-label-safety{z-index:auto;gap:3px}.map-label-safety .map-label-icon{min-width:25px;width:25px;height:25px;padding:3px;border-width:1px;border-radius:6px;gap:3px;box-shadow:0 2px 7px #29472d18}.map-label-safety .map-label-icon svg{width:18px;height:18px}.map-label-medical .map-label-name,.map-label-defib .map-label-name{display:none}.map-label-medical .map-label-icon:has(.map-label-combined-aed){width:auto;min-width:49px}.map-label-combined-aed{padding:1px;margin-left:0;border:0;border-radius:3px}.map-label-combined-aed svg{width:18px;height:18px}.map-label-safety.selected{z-index:1}
+
+.map-label[data-kind="toilets"] .map-label-icon{background:#236985;color:white;padding:3px}.map-label[data-kind="toilets"] .map-label-icon svg{width:18px;height:18px}
+
+.map-label-icon>svg{width:18px;height:18px;flex-shrink:0}
+
+.map-label-safety.selected .map-label-name{display:block}.map-label.selected{z-index:2}
+
+.map-label .map-label-icon,.map-label.selected .map-label-icon{background:var(--object-color);color:var(--object-ink)}

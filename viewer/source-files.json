@@ -1,0 +1,19 @@
+[
+  "viewer/index.html",
+  "src/viewer.tsx",
+  "src/ShareMap.tsx",
+  "src/MapCanvas.tsx",
+  "src/objectIcons.ts",
+  "src/siteGps.ts",
+  "src/phoneSensors.ts",
+  "src/referenceMap.ts",
+  "src/reference-map.json",
+  "src/model.ts",
+  "src/routing.ts",
+  "src/roadRouting.ts",
+  "src/routeStops.ts",
+  "src/drawing.ts",
+  "src/viewer-base.css",
+  "src/map-labels.css",
+  "src/viewer.css"
+]
