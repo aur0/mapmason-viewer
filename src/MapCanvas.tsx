@@ -4,6 +4,7 @@ import { traceRoadRoute } from './roadRouting';
 import type { WalkingRoute } from './routing';
 import { useEffect, useRef } from 'react';
 import { addReferenceMap, updateReferenceMap, referenceGlyphs } from './referenceMap';
+import { referenceFeatures } from './referenceLayers';
 import * as maplibregl from 'maplibre-gl';
 import workerSource from 'maplibre-gl/dist/maplibre-gl-worker.mjs?raw';
 import type { GeoJSONSource, Map as LibreMap } from 'maplibre-gl';
@@ -12,7 +13,7 @@ import type { FeatureCollection, Point } from 'geojson';
 import { drawingPreview,segmentLengthLabel } from './drawing';
 
 export type ViewerPosition = Pick<GeolocationPosition,'coords'|'timestamp'>;
-export type MapActions = { roadRoute: () => import('./model').SitePath[]; relock: () => void; heading: (heading: number | null) => void; orient: (bearing: number, pitch: number) => void; fit: () => void; zoom: (by: number) => void; north: () => void; locate: (at: Coord, options?: { preserveZoom?: boolean; from?: Coord; pointTowards?: boolean }) => void };
+export type MapActions = { roadRoute: () => import('./model').SitePath[]; relock: () => void; heading: (heading: number | null) => void; orient: (bearing: number, pitch: number) => void; fit: () => void; fitReference: (id:string) => void; zoom: (by: number) => void; north: () => void; locate: (at: Coord, options?: { preserveZoom?: boolean; from?: Coord; pointTowards?: boolean }) => void };
 type Props = { onManualInteraction?: () => void; route?: WalkingRoute | null; onPosition?: (position: ViewerPosition) => void; gps?: boolean; onLocationError?: (message: string) => void; project: EventProject; selected: string | null; tool: string; mode: '2d' | '3d'; reference: boolean; ground:boolean; boundary:boolean; groundVertex:number|null; onGroundSelect:(index:number)=>void; onGroundMove:(index:number,at:Coord)=>void; onGroundInsert:(index:number,at:Coord)=>void; onGroundRemove:(index:number)=>void; grid: boolean; labels: boolean; draft: Coord[]; target: Coord | null; pathVertex: number | null; actions: React.RefObject<MapActions | null>; onConnect: (at:Coord,closeLoop:boolean) => void; onClick: (at: Coord, id?: string) => void; onMove: (id: string, at: Coord) => void; onPathMove: (id: string, index: number, at: Coord) => void; onPathInsert: (id: string, index: number, at: Coord) => void; onPathRemove: (id: string, index: number) => void; onPathBranch: (id:string,index:number) => void; onPathSelect: (id:string,index: number) => void; onCursor: (at: Coord) => void; onError: (s: string) => void };
 const empty: FeatureCollection = { type: 'FeatureCollection', features: [] };
 // Keep the renderer worker bundled, including when a single HTML export is opened offline.
@@ -166,6 +167,7 @@ export default function MapCanvas(props: Props) {
       heading: heading => {sensorHeading=heading!==null&&Number.isFinite(heading)?heading:null;renderGpsHeading();},
       orient: (bearing, pitch) => map.jumpTo({ bearing, pitch }, { geolocateSource: true }),
       fit: () => { pauseGpsFollow();const p = latest.current.project; const corners = p.layout === 'route' ? [] : groundRing(p); const bounds = new maplibregl.LngLatBounds(); corners.forEach(c => bounds.extend(c)); p.objects.forEach(o => objectRing(o).forEach(c=>bounds.extend(c))); p.paths.forEach(path => path.points.forEach(c => bounds.extend(c))); p.areas.forEach(a => a.rings.forEach(r => r.forEach(c => bounds.extend(c)))); if (bounds.isEmpty()) { map.flyTo({center:p.center,zoom:17.5}); return; } map.fitBounds(bounds, { padding: Math.min(65, map.getContainer().clientWidth / 5), duration: 600, maxZoom: 19 }); },
+      fitReference: id => {const layer=latest.current.project.referenceLayers?.find(l=>l.id===id);if(!layer)return;pauseGpsFollow();const bounds=new maplibregl.LngLatBounds();layer.points.forEach(p=>bounds.extend(p.position));layer.lines.forEach(l=>l.points.forEach(p=>bounds.extend(p)));layer.polygons.forEach(a=>a.rings.forEach(r=>r.forEach(p=>bounds.extend(p))));if(!bounds.isEmpty())map.fitBounds(bounds,{padding:Math.min(65,map.getContainer().clientWidth/5),maxZoom:18,duration:500});},
       zoom: by => map.jumpTo({ zoom: map.getZoom() + by }, { geolocateSource: true }), north: () => map.easeTo({ bearing: 0, duration: 400 }),
       locate: (at,options) => {
         pauseGpsFollow();
@@ -190,6 +192,10 @@ export default function MapCanvas(props: Props) {
       map.addLayer({ id: 'ground', type: 'fill', source: 'ground', paint: { 'fill-color': '#d9e3d3', 'fill-opacity': .93 } });
       map.addLayer({ id: 'ground-edge', type: 'line', source: 'ground', paint: { 'line-color': '#6b8f76', 'line-width': 1.5, 'line-dasharray': [4, 3] } });
       map.addLayer({ id: 'grid', type: 'line', source: 'grid', paint: { 'line-color': '#6a8a74', 'line-width': .6, 'line-opacity': .2 } });
+      map.addSource('tracing-reference',{type:'geojson',data:empty});
+      map.addLayer({id:'tracing-reference-fill',type:'fill',source:'tracing-reference',filter:['==',['geometry-type'],'Polygon'],paint:{'fill-color':'#7963bf','fill-opacity':['*',['get','opacity'],.2]}});
+      map.addLayer({id:'tracing-reference-lines',type:'line',source:'tracing-reference',filter:['in',['geometry-type'],['literal',['LineString','Polygon']]],paint:{'line-color':'#7050b4','line-width':2.5,'line-opacity':['get','opacity']}});
+      map.addLayer({id:'tracing-reference-points',type:'circle',source:'tracing-reference',filter:['==',['geometry-type'],'Point'],paint:{'circle-radius':5,'circle-color':'#7050b4','circle-opacity':['get','opacity'],'circle-stroke-color':'#fff','circle-stroke-width':1,'circle-stroke-opacity':['get','opacity']}});
       map.addLayer({ id: 'camping', type: 'fill', source: 'objects', filter: ['in', ['get','kind'], ['literal',[...areaKinds]]], paint: { 'fill-color': ['get','color'], 'fill-opacity': ['case',['get','selected'],.55,.32] } });
       map.addLayer({ id: 'camping-edge', type: 'line', source: 'objects', filter: ['in', ['get','kind'], ['literal',[...areaKinds]]], paint: { 'line-color': ['case',['get','selected'],'#254c2e','#63865a'], 'line-width': ['case',['get','selected'],2,1.3], 'line-dasharray':[4,2] } });
       map.addLayer({ id: 'areas-flat', type: 'fill', source: 'areas', paint: { 'fill-color': ['case', ['get', 'selected'], '#c1e4ad', '#abc3ad'], 'fill-opacity': .8 } });
@@ -251,6 +257,7 @@ export default function MapCanvas(props: Props) {
     function update() {
       const p = latest.current; if (!ready) return;
       const set = (id: string, data: GeoJSON.GeoJSON) => (map.getSource(id) as GeoJSONSource).setData(data);
+      set('tracing-reference',referenceFeatures(p.project.referenceLayers));
       set('walking-route', p.route ? {type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{type:'LineString',coordinates:p.route.points}},... [p.route.points[0],p.route.points.at(-1)!].map(at=>({type:'Feature' as const,properties:{},geometry:{type:'Point' as const,coordinates:at}}))]} : empty);
       set('walking-access', p.route ? {type:'FeatureCollection',features:p.route.access.map(points=>({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:points}}))} : empty);
       set('ground', { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [groundRing(p.project)] } });

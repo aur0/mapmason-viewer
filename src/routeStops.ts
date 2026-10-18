@@ -9,6 +9,6 @@ export function moveRouteVia(project:EventProject,id:string,direction:-1|1):Even
   const objects=[...project.objects];[objects[indices[at]],objects[indices[other]]]=[objects[indices[other]],objects[indices[at]]];
   return {...project,objects};
 }
-export function visitorProject(project:EventProject):EventProject { return {...project,objects:project.objects.filter(o=>o.kind!=='shaping')}; }
+export function visitorProject(project:EventProject):EventProject { const {referenceLayers:_references,...visitor}=project;return {...visitor,objects:project.objects.filter(o=>o.kind!=='shaping')}; }
 
 export function insertShapingPoint(project:EventProject,point:SiteObject):EventProject { return {...project,objects:[...project.objects,point]}; }

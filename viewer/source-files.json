@@ -8,6 +8,7 @@
   "src/siteGps.ts",
   "src/phoneSensors.ts",
   "src/referenceMap.ts",
+  "src/referenceLayers.ts",
   "src/reference-map.json",
   "src/model.ts",
   "src/routing.ts",

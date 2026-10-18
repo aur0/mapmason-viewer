@@ -34,7 +34,8 @@ export type SitePath = { generatedBy?: 'road-trace'; id: string; name: string; w
 export type SiteArea = { id: string; name: string; rings: Coord[][]; height: number };
 export type MapLayout = 'site' | 'route' | 'blank';
 export type SiteGround={width:number;depth:number;rotation:number;position?:Coord;outline?:Coord[];curves?:number[]};
-export type EventProject = { format: 'fieldwork-event'; version: 1; layout?: MapLayout; name: string; center: Coord; site: SiteGround; objects: SiteObject[]; paths: SitePath[]; areas: SiteArea[] };
+export type ReferenceLayer = { id:string;name:string;visible:boolean;opacity:number;points:{name:string;position:Coord}[];lines:{name:string;points:Coord[]}[];polygons:{name:string;rings:Coord[][]}[] };
+export type EventProject = { format: 'fieldwork-event'; version: 1; layout?: MapLayout; name: string; center: Coord; site: SiteGround; objects: SiteObject[]; paths: SitePath[]; areas: SiteArea[];referenceLayers?:ReferenceLayer[] };
 export function newMapProject(layout:MapLayout,name:string,center:Coord):EventProject {
   return parseProject({format:'fieldwork-event',version:1,layout,name,center,site:{width:260,depth:220,rotation:0},objects:[],paths:[],areas:[]});
 }
@@ -288,7 +289,20 @@ export function parseProject(value: unknown): EventProject {
     const rings = (a.rings as unknown[]).map(r => { if (!Array.isArray(r) || r.length < 4) fail('Area rings must contain at least four coordinates.'); const ring = (r as unknown[]).map(coord); vertices += ring.length; if (vertices > 2000) fail('Maximum 2,000 points per area.'); if (ring[0][0] !== ring.at(-1)![0] || ring[0][1] !== ring.at(-1)![1]) fail('Area rings must be closed.'); return ring; });
     return { id: text(a.id), name: text(a.name), height: num(a.height, 0, 100), rings };
   });
-  const ids = [...result.objects, ...result.paths, ...result.areas].map(o => o.id); if (new Set(ids).size !== ids.length) fail('Object, area and path IDs must be unique.');
+  if(p.referenceLayers!==undefined){
+    if(!Array.isArray(p.referenceLayers)||p.referenceLayers.length>5)fail('Maximum five reference layers per map.');
+    let vertices=0;
+    const referenceCoord=(v:unknown)=>{if(++vertices>40000)fail('Maximum 40,000 reference coordinates per map.');return coord(v);};
+    const list=(v:unknown):unknown[]=>Array.isArray(v)&&v.length<=2000?v:fail('Invalid reference geometry.');
+    result.referenceLayers=(p.referenceLayers as unknown[]).map(v=>{
+      const layer=obj(v);if(typeof layer.visible!=='boolean')fail('Reference visibility must be true or false.');
+      return {id:text(layer.id),name:text(layer.name),visible:layer.visible as boolean,opacity:num(layer.opacity,0,1),
+        points:list(layer.points).map(v=>{const point=obj(v);return {name:text(point.name),position:referenceCoord(point.position)};}),
+        lines:list(layer.lines).map(v=>{const line=obj(v);if(!Array.isArray(line.points)||line.points.length<2||line.points.length>40000)fail('Reference lines need at least two coordinates.');return {name:text(line.name),points:(line.points as unknown[]).map(referenceCoord)};}),
+        polygons:list(layer.polygons).map(v=>{const polygon=obj(v);const rings=list(polygon.rings).map(v=>{const ring=list(v).map(referenceCoord);if(ring.length<4||ring[0][0]!==ring.at(-1)![0]||ring[0][1]!==ring.at(-1)![1])fail('Reference polygons need closed rings.');return ring;});if(!rings.length)fail('Reference polygons need an outer ring.');return {name:text(polygon.name),rings};})};
+    });
+  }
+  const ids = [...result.objects, ...result.paths, ...result.areas,...(result.referenceLayers??[])].map(o => o.id); if (new Set(ids).size !== ids.length) fail('Object, area, path and reference IDs must be unique.');
   return result;
 }
 export function relocate(project: EventProject, center: Coord): EventProject {
