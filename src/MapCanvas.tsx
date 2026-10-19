@@ -5,37 +5,40 @@ import type { WalkingRoute } from './routing';
 import { useEffect, useRef } from 'react';
 import { addReferenceMap, updateReferenceMap, referenceGlyphs } from './referenceMap';
 import { referenceFeatures } from './referenceLayers';
+import {waterTexture} from './waterTexture';
 import * as maplibregl from 'maplibre-gl';
-import workerSource from 'maplibre-gl/dist/maplibre-gl-worker.mjs?raw';
+import './mapLibreWorker';
 import type { GeoJSONSource, Map as LibreMap } from 'maplibre-gl';
-import { groundControlRing,groundFromPoints,groundRing,isBoundaryTool,areaKinds,isAreaKind, connectedPathIds, pathOutlineFeatures, moveConnectedPathVertex, gridFeatures, kinds, objectFeatures, objectRing, pathFeatures, type Coord, type EventProject } from './model';
+import { groundControlRing,groundFromPoints,groundRing,isBoundaryTool,areaKinds,isAreaKind, connectedPathIds, bridgePaths, pathOutlineFeatures, moveConnectedPathVertex, gridFeatures, kinds, objectFeatures, objectRing, pathFeatures, type Coord, type EventProject } from './model';
 import type { FeatureCollection, Point } from 'geojson';
 import { drawingPreview,segmentLengthLabel } from './drawing';
+import {pathAccess,pathTypes,pathVertexKey,type PathType} from './model';
+import {PathDeckLayer} from './PathDeckLayer';
+import {MapObjectModelsLayer} from './MapObjectModelsLayer';
 
 export type ViewerPosition = Pick<GeolocationPosition,'coords'|'timestamp'>;
 export type MapActions = { roadRoute: () => import('./model').SitePath[]; relock: () => void; heading: (heading: number | null) => void; orient: (bearing: number, pitch: number) => void; fit: () => void; fitReference: (id:string) => void; zoom: (by: number) => void; north: () => void; locate: (at: Coord, options?: { preserveZoom?: boolean; from?: Coord; pointTowards?: boolean }) => void };
-type Props = { onManualInteraction?: () => void; route?: WalkingRoute | null; onPosition?: (position: ViewerPosition) => void; gps?: boolean; onLocationError?: (message: string) => void; project: EventProject; selected: string | null; tool: string; mode: '2d' | '3d'; reference: boolean; ground:boolean; boundary:boolean; groundVertex:number|null; onGroundSelect:(index:number)=>void; onGroundMove:(index:number,at:Coord)=>void; onGroundInsert:(index:number,at:Coord)=>void; onGroundRemove:(index:number)=>void; grid: boolean; labels: boolean; draft: Coord[]; target: Coord | null; pathVertex: number | null; actions: React.RefObject<MapActions | null>; onConnect: (at:Coord,closeLoop:boolean) => void; onClick: (at: Coord, id?: string) => void; onMove: (id: string, at: Coord) => void; onPathMove: (id: string, index: number, at: Coord) => void; onPathInsert: (id: string, index: number, at: Coord) => void; onPathRemove: (id: string, index: number) => void; onPathBranch: (id:string,index:number) => void; onPathSelect: (id:string,index: number) => void; onCursor: (at: Coord) => void; onError: (s: string) => void };
+type Props = {onMapReady?:(map:LibreMap|null)=>void;pathType?:PathType;draftTypes?:PathType[]; onManualInteraction?: () => void; route?: WalkingRoute | null; onPosition?: (position: ViewerPosition) => void; gps?: boolean; onLocationError?: (message: string) => void; project: EventProject; selected: string | null; tool: string; mode: '2d' | '3d'; reference: boolean; ground:boolean; boundary:boolean; groundVertex:number|null; onGroundSelect:(index:number)=>void; onGroundMove:(index:number,at:Coord)=>void; onGroundInsert:(index:number,at:Coord)=>void; onGroundRemove:(index:number)=>void; grid: boolean; labels: boolean; draft: Coord[]; target: Coord | null; pathVertex: number | null; pathVertices?: {pathId:string;index:number}[]; actions: React.RefObject<MapActions | null>; onConnect: (at:Coord,closeLoop:boolean) => void; onClick: (at: Coord, id?: string) => void; onMove: (id: string, at: Coord) => void; onPathMove: (id: string, index: number, at: Coord) => void; onPathInsert: (id: string, index: number, at: Coord) => void; onPathRemove: (id: string, index: number) => void; onPathBranch: (id:string,index: number) => void; onPathSelect: (id:string,index: number,shiftKey:boolean) => void; onCursor: (at: Coord) => void; onError: (s: string) => void };
 const empty: FeatureCollection = { type: 'FeatureCollection', features: [] };
-// Keep the renderer worker bundled, including when a single HTML export is opened offline.
-// MapLibre falls back to a classic worker for file:// pages. Its bundled worker is
-// self-contained; removing only the unused default export supports both worker types.
-const standaloneWorker = workerSource.replace(/export\{\w+ as default\};\s*(?:\/\/# sourceMappingURL=[^\n]*)?\s*$/, '');
-maplibregl.setWorkerUrl(URL.createObjectURL(new Blob([standaloneWorker], { type: 'text/javascript' })));
-
+const labelZoom={fullText:{highPriority:13,mediumPriority:14,other:15},showLowPriority:12.5};
 export default function MapCanvas(props: Props) {
   const el = useRef<HTMLDivElement>(null), mapRef = useRef<LibreMap | null>(null);
   const latest = useRef(props); latest.current = props;
   const markers = useRef<maplibregl.Marker[]>([]);
   useEffect(() => {
     let map: LibreMap; let ready = false;
+    const decks=new PathDeckLayer();
+    const objectModels=new MapObjectModelsLayer(()=>positionEnds());
     const lengthLabel=document.createElement('div');lengthLabel.className='drawing-length';lengthLabel.hidden=true;lengthLabel.title='Next segment length';
     let endpointHandles: { marker: maplibregl.Marker; id:string; index: number }[] = [];
     let midpointHandles: { marker: maplibregl.Marker; id:string; index: number }[] = [];
+    let objectLabelMarkers:{marker:maplibregl.Marker;id:string}[]=[];
     let groundPoints:Coord[]=[];
     let groundMidpoints:{marker:maplibregl.Marker;index:number}[]=[];
     let editingPaths=new Map<string,Coord[]>();
     let vertexHandles:{marker:maplibregl.Marker;id:string;index:number}[]=[];
     let pointer:{x:number;y:number}|null=null,shiftHeld=false,hasDraft=false;
+    let startObjectDrag:(event:PointerEvent,fromLabel?:boolean)=>void=()=>{};
     let snapTargets:{at:Coord;node:HTMLButtonElement;closeLoop:boolean}[]=[];
     const nearestTarget=(point:{x:number;y:number})=>{
       let distance=14,result:typeof snapTargets[number]|undefined;
@@ -65,17 +68,23 @@ export default function MapCanvas(props: Props) {
         const x=Math.max(8,Math.min(pointer.x+14,map.getContainer().clientWidth-lengthLabel.offsetWidth-8)),y=Math.max(8,Math.min(pointer.y-32,map.getContainer().clientHeight-lengthLabel.offsetHeight-8));
         lengthLabel.style.transform=`translate(${x}px,${y}px)`;
       }
-      const data=drawingPreview(p.tool,p.draft,cursor,extension);
+      const data=drawingPreview(p.tool,p.draft,cursor,extension,p.draftTypes,p.pathType);
       (map.getSource('draft') as GeoJSONSource).setData(data.draft);(map.getSource('draft-preview') as GeoJSONSource).setData(data.preview);
     };
     const shiftChange=(event:KeyboardEvent)=>{if(event.key==='Shift'){shiftHeld=event.type==='keydown';renderDraft();}};
     const positionEnds = () => {
+      objectLabelMarkers.forEach(({marker,id})=>{const object=latest.current.project.objects.find(item=>item.id===id);if(!object)return;const ground=map.project(object.position),raised=latest.current.mode==='3d'?objectModels.project(object.position,object.height):undefined;marker.setLngLat(object.position).setOffset(raised?[raised.x-ground.x,raised.y-ground.y-8]:[0,-8]);});
       groundMidpoints.forEach(({marker,index})=>{const a=map.project(groundPoints[index]),b=map.project(groundPoints[(index+1)%groundPoints.length]);marker.setLngLat(map.unproject([(a.x+b.x)/2,(a.y+b.y)/2]));});
-      vertexHandles.forEach(({marker,id,index})=>marker.setLngLat(editingPaths.get(id)![index]));
+      vertexHandles.forEach(({marker,id,index})=>{
+        const at=editingPaths.get(id)![index],height=latest.current.project.paths.find(path=>path.id===id)?.heights?.[index]??0,ground=map.project(at),raised=latest.current.mode==='3d'?decks.project(at,height):undefined;
+        marker.setLngLat(at).setOffset(raised?[raised.x-ground.x,raised.y-ground.y]:[0,0]);
+      });
       midpointHandles.forEach(({ marker, id,index }) => {
         const editingPoints=editingPaths.get(id)!;
         const a = map.project(editingPoints[index - 1]), b = map.project(editingPoints[index]);
-        marker.setLngLat(map.unproject([(a.x + b.x) / 2, (a.y + b.y) / 2]));
+        const at=map.unproject([(a.x+b.x)/2,(a.y+b.y)/2]),path=latest.current.project.paths.find(path=>path.id===id),height=((path?.heights?.[index-1]??0)+(path?.heights?.[index]??0))/2;
+        const ground=map.project(at),raised=latest.current.mode==='3d'?decks.project([at.lng,at.lat],height):undefined;
+        marker.setLngLat(at).setOffset(raised?[raised.x-ground.x,raised.y-ground.y]:[0,0]);
       });
       endpointHandles.forEach(({ marker,id, index }) => {
         const editingPoints=editingPaths.get(id)!;
@@ -187,7 +196,6 @@ export default function MapCanvas(props: Props) {
     };
     let referenceReady = false;
     map.on('load', () => {
-      if (latest.current.reference) { addReferenceMap(map); referenceReady = true; updateReferenceMap(map, true, latest.current.mode); }
       for (const id of ['ground', 'grid', 'areas', 'objects', 'paths', 'path-outlines', 'draft', 'draft-preview', 'target']) map.addSource(id, { type: 'geojson', data: empty });
       map.addLayer({ id: 'ground', type: 'fill', source: 'ground', paint: { 'fill-color': '#d9e3d3', 'fill-opacity': .93 } });
       map.addLayer({ id: 'ground-edge', type: 'line', source: 'ground', paint: { 'line-color': '#6b8f76', 'line-width': 1.5, 'line-dasharray': [4, 3] } });
@@ -196,18 +204,29 @@ export default function MapCanvas(props: Props) {
       map.addLayer({id:'tracing-reference-fill',type:'fill',source:'tracing-reference',filter:['==',['geometry-type'],'Polygon'],paint:{'fill-color':'#7963bf','fill-opacity':['*',['get','opacity'],.2]}});
       map.addLayer({id:'tracing-reference-lines',type:'line',source:'tracing-reference',filter:['in',['geometry-type'],['literal',['LineString','Polygon']]],paint:{'line-color':'#7050b4','line-width':2.5,'line-opacity':['get','opacity']}});
       map.addLayer({id:'tracing-reference-points',type:'circle',source:'tracing-reference',filter:['==',['geometry-type'],'Point'],paint:{'circle-radius':5,'circle-color':'#7050b4','circle-opacity':['get','opacity'],'circle-stroke-color':'#fff','circle-stroke-width':1,'circle-stroke-opacity':['get','opacity']}});
-      map.addLayer({ id: 'camping', type: 'fill', source: 'objects', filter: ['in', ['get','kind'], ['literal',[...areaKinds]]], paint: { 'fill-color': ['get','color'], 'fill-opacity': ['case',['get','selected'],.55,.32] } });
-      map.addLayer({ id: 'camping-edge', type: 'line', source: 'objects', filter: ['in', ['get','kind'], ['literal',[...areaKinds]]], paint: { 'line-color': ['case',['get','selected'],'#254c2e','#63865a'], 'line-width': ['case',['get','selected'],2,1.3], 'line-dasharray':[4,2] } });
+      map.addLayer({id:'tracing-reference-labels',type:'symbol',source:'tracing-reference',layout:{'text-field':['get','name'],'text-font':['Noto Sans Regular'],'text-size':12,'text-anchor':'top','text-offset':[0,.7],'text-max-width':14},paint:{'text-color':'#503585','text-halo-color':'#fff','text-halo-width':1.5,'text-opacity':['get','opacity']}});
+      map.addLayer({ id: 'camping', type: 'fill', source: 'objects', filter: ['in', ['get','kind'], ['literal',[...areaKinds]]], paint: { 'fill-color': ['get','color'], 'fill-opacity': ['case',['==',['get','kind'],'waterArea'],.8,['get','selected'],.55,.32] } });
+      map.addLayer({ id: 'camping-edge', type: 'line', source: 'objects', filter: ['in', ['get','kind'], ['literal',areaKinds.filter(kind=>kind!=='waterArea')]], paint: { 'line-color': ['case',['get','selected'],'#254c2e','#63865a'], 'line-width': ['case',['get','selected'],2,1.3], 'line-dasharray':[4,2] } });
+      map.addImage('water-facets',waterTexture());
+      map.addLayer({id:'water-area-texture',type:'fill',source:'objects',filter:['==',['get','kind'],'waterArea'],paint:{'fill-pattern':'water-facets','fill-opacity':.45}});
+      map.addLayer({id:'water-area-edge',type:'line',source:'objects',filter:['==',['get','kind'],'waterArea'],paint:{'line-color':['case',['get','selected'],'#254c2e','#428eae'],'line-width':['case',['get','selected'],2,1.3]}});
       map.addLayer({ id: 'areas-flat', type: 'fill', source: 'areas', paint: { 'fill-color': ['case', ['get', 'selected'], '#c1e4ad', '#abc3ad'], 'fill-opacity': .8 } });
       map.addLayer({ id: 'areas-edge', type: 'line', source: 'areas', paint: { 'line-color': ['case', ['get', 'selected'], '#254a31', '#6c9074'], 'line-width': ['case', ['get', 'selected'], 3, 1.5] } });
       map.addLayer({ id: 'areas-3d', type: 'fill-extrusion', source: 'areas', filter: ['>', ['get', 'height'], 0], paint: { 'fill-extrusion-color': ['case', ['get', 'selected'], '#c1e4ad', '#abc3ad'], 'fill-extrusion-height': ['get', 'height'] } });
       map.addLayer({ id: 'paths', type: 'fill', source: 'paths', paint: { 'fill-color': ['case', ['get', 'selected'], '#efffe0', '#f4efde'] } });
+      map.setPaintProperty('paths','fill-color',['case',['get','selected'],'#efffe0',['match',['get','segmentType'],'bridge','#dfb974','underpass','#94aeba','#f4efde']]);
+      map.addLayer({id:'not-step-free-paths',type:'fill',source:'paths',filter:['all',['==',['get','access'],'notStepFree'],['==',['get','selected'],true]],paint:{'fill-color':'#c54f3f','fill-opacity':.78}});
+      map.addLayer({id:'bridge-edge',type:'line',source:'paths',filter:['==',['get','segmentType'],'bridge'],paint:{'line-color':'#705329','line-width':2}});
+      map.addLayer({id:'underpass-edge',type:'line',source:'paths',filter:['==',['get','segmentType'],'underpass'],paint:{'line-color':'#445b68','line-width':2,'line-dasharray':[3,2]}});
       map.addLayer({ id: 'path-edge', type: 'line', source: 'path-outlines', paint: { 'line-color': '#9b9f84', 'line-width': .8, 'line-opacity': .5 } });
       map.addLayer({ id: 'objects-flat', type: 'fill', source: 'objects', filter:['!', ['in',['get','kind'],['literal',[...areaKinds]]]], paint: { 'fill-color': ['get', 'color'] } });
-      map.addLayer({ id: 'objects-3d', type: 'fill-extrusion', source: 'objects', filter:['!', ['in',['get','kind'],['literal',[...areaKinds]]]], paint: { 'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-height': ['get', 'height'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': true } });
-      map.addLayer({ id: 'object-edge', type: 'line', source: 'objects', filter:['!', ['in',['get','kind'],['literal',[...areaKinds]]]], paint: { 'line-color': ['case', ['get', 'selected'], '#173e2b', '#ffffff'], 'line-width': ['case', ['get', 'selected'], 3, 1], 'line-opacity': .8 } });
+      map.addLayer({ id: 'objects-3d', type: 'fill-extrusion', source: 'objects', filter:['all',['!', ['in',['get','kind'],['literal',[...areaKinds]]] ],['!=',['get','customModel'],true]], paint: { 'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-base': ['get','base'], 'fill-extrusion-height': ['get', 'height'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': true } });
+      map.addLayer({ id: 'object-edge', type: 'line', source: 'objects', filter:['!', ['in',['get','kind'],['literal',[...areaKinds,'tree']]]], paint: { 'line-color': ['case', ['get', 'selected'], '#173e2b', '#ffffff'], 'line-width': ['case', ['get', 'selected'], 3, 1], 'line-opacity': .8 } });
+      map.addLayer(decks);
+      map.addLayer(objectModels);
       map.addLayer({ id: 'draft', type: 'line', source: 'draft', paint: { 'line-color': '#24714b', 'line-width': 4, 'line-dasharray': [2, 1] } });
       map.addLayer({id:'draft-preview',type:'line',source:'draft-preview',paint:{'line-color':'#24714b','line-width':2,'line-opacity':.65,'line-dasharray':[3,2]}});
+      for(const layer of ['draft','draft-preview'])map.setPaintProperty(layer,'line-color',['match',['get','segmentType'],'bridge','#ad7832','underpass','#446e91','#24714b']);
       map.setFilter('draft',['==','$type','LineString']);
       map.addLayer({ id:'draft-area',type:'fill',source:'draft',filter:['==','$type','Polygon'],paint:{'fill-color':'#91b886','fill-opacity':.3} },'draft');
       map.addLayer({ id: 'draft-points', type: 'circle', source: 'draft', filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#24714b', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 } });
@@ -219,7 +238,7 @@ export default function MapCanvas(props: Props) {
       map.addLayer({id:'walking-route-line',type:'line',source:'walking-route',filter:['==','$type','LineString'],layout:{'line-cap':'round','line-join':'round'},paint:{'line-color':'#238bff','line-width':6}});
       map.addLayer({id:'walking-access-line',type:'line',source:'walking-access',paint:{'line-color':'#238bff','line-width':3,'line-dasharray':[2,2]}});
       map.addLayer({id:'walking-route-ends',type:'circle',source:'walking-route',filter:['==','$type','Point'],paint:{'circle-radius':6,'circle-color':'#238bff','circle-stroke-color':'#ffffff','circle-stroke-width':3}});
-      ready = true; update(); props.actions.current?.fit();
+      ready = true; update(); props.actions.current?.fit();latest.current.onMapReady?.(map);
     });
     let labelFrame=0;
     const priorities:Record<string,number>={medical:100,defib:95,start:85,finish:85,entrance:80,stage:75,information:70,camping:65,parking:65,toilets:55,water:50};
@@ -231,7 +250,7 @@ export default function MapCanvas(props: Props) {
       labels.sort((a,b)=>Number(b.classList.contains('selected'))-Number(a.classList.contains('selected'))+((priorities[b.dataset.kind!]??30)-(priorities[a.dataset.kind!]??30))/1000);
       for(const node of labels){
         const selected=node.classList.contains('selected')||node.contains(document.activeElement),priority=priorities[node.dataset.kind!]??30;
-        node.classList.toggle('map-label-compact',!selected&&zoom<(priority>=95?14.5:priority>=65?16:17));
+        node.classList.toggle('map-label-compact',!selected&&zoom<(priority>=95?labelZoom.fullText.highPriority:priority>=65?labelZoom.fullText.mediumPriority:labelZoom.fullText.other));
         node.style.translate='0px 0px';
         const r=node.getBoundingClientRect();
         const onScreen=r.right>bounds.left&&r.left<bounds.right&&r.bottom>bounds.top&&r.top<bounds.bottom;
@@ -241,7 +260,7 @@ export default function MapCanvas(props: Props) {
           const box={left:r.left+dx-5,right:r.right+dx+5,top:r.top+dy-5,bottom:r.bottom+dy+5};
           const overlaps=occupied.some(b=>box.left<b.right&&box.right>b.left&&box.top<b.bottom&&box.bottom>b.top);
           
-          if(selected||(onScreen&&!(zoom<14&&priority<65)&&!overlaps)){
+          if(selected||(onScreen&&!(zoom<labelZoom.showLowPriority&&priority<65)&&!overlaps)){
             node.style.translate=dx+'px '+dy+'px';
             node.style.setProperty('--leader-length',Math.hypot(dx,dy)+'px');
             node.style.setProperty('--leader-angle',Math.atan2(-dy,-dx)+'rad');
@@ -258,15 +277,22 @@ export default function MapCanvas(props: Props) {
       const p = latest.current; if (!ready) return;
       const set = (id: string, data: GeoJSON.GeoJSON) => (map.getSource(id) as GeoJSONSource).setData(data);
       set('tracing-reference',referenceFeatures(p.project.referenceLayers));
+      map.setLayoutProperty('tracing-reference-labels','visibility',p.labels?'visible':'none');
       set('walking-route', p.route ? {type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{type:'LineString',coordinates:p.route.points}},... [p.route.points[0],p.route.points.at(-1)!].map(at=>({type:'Feature' as const,properties:{},geometry:{type:'Point' as const,coordinates:at}}))]} : empty);
       set('walking-access', p.route ? {type:'FeatureCollection',features:p.route.access.map(points=>({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:points}}))} : empty);
       set('ground', { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [groundRing(p.project)] } });
-      set('grid', gridFeatures(p.project)); set('objects', objectFeatures(p.project, p.selected)); const paths=pathFeatures(p.project,p.selected);set('paths',paths);set('path-outlines',pathOutlineFeatures(paths));
+      decks.update(p.project,p.selected,p.mode,p.route);
+      objectModels.update(p.project,p.mode);
+      set('grid', gridFeatures(p.project)); set('objects', objectFeatures(p.project, p.selected)); const paths=pathFeatures(p.project,p.selected),bridgeFeatures=pathFeatures({...p.project,paths:bridgePaths(p.project.bridges)},p.selected);paths.features.push(...bridgeFeatures.features);set('paths',paths);set('path-outlines',pathOutlineFeatures({...paths,features:paths.features.filter(feature=>p.mode!=='3d'||!feature.properties?.elevated)}));
+      map.setFilter('paths',p.mode==='3d'?['!=',['get','elevated'],true]:null);
+      for(const [layer,type] of [['bridge-edge','bridge'],['underpass-edge','underpass']])map.setFilter(layer,p.mode==='3d'?['all',['==',['get','segmentType'],type],['!=',['get','elevated'],true]]:['==',['get','segmentType'],type]);
+      for(const layer of ['walking-route-outline','walking-route-line','walking-route-ends'])map.setLayoutProperty(layer,'visibility',p.mode==='3d'&&p.route?.heights?.some(height=>height>0)?'none':'visible');
       set('areas', { type: 'FeatureCollection', features: p.project.areas.map(a => ({ type: 'Feature', properties: { id: a.id, height: a.height, selected: a.id === p.selected }, geometry: { type: 'Polygon', coordinates: a.rings } })) });
       map.setPaintProperty('draft-area','fill-color',p.tool==='ground'?'#d9e3d3':isAreaKind(p.tool)?kinds[p.tool].color:'#91b886');
       set('target', { type: 'FeatureCollection', features: p.target ? [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p.target } }] : [] } as FeatureCollection<Point>);
-      if (p.reference && !referenceReady) { addReferenceMap(map, 'ground'); referenceReady = true; }
-      if (referenceReady) updateReferenceMap(map, p.reference, p.mode);
+      const referenceVisible=p.reference&&!(p.ground&&p.project.layout!=='route');
+      if (referenceVisible && !referenceReady) { addReferenceMap(map, 'ground'); referenceReady = true; }
+      if (referenceReady) updateReferenceMap(map, referenceVisible, p.mode);
       map.setLayoutProperty('ground','visibility',p.project.layout!=='route' && p.ground && p.tool!=='ground'?'visible':'none');
       map.setLayoutProperty('ground-edge','visibility',p.project.layout!=='route' && p.boundary?'visible':'none');
       map.setLayoutProperty('grid', 'visibility', p.project.layout!=='route' && p.grid && p.tool!=='ground' ? 'visible' : 'none');
@@ -276,9 +302,10 @@ export default function MapCanvas(props: Props) {
       map.getCanvas().style.cursor = p.tool === 'select' || p.tool === 'preview' || p.tool==='edit-ground' ? 'grab' : 'crosshair';
       if(p.tool==='path' || isBoundaryTool(p.tool) || p.tool==='extend-start' || p.tool==='extend-end')map.boxZoom.disable();else map.boxZoom.enable();
       const focusLabel = document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('path-vertex') ? document.activeElement.getAttribute('aria-label') : null;
-      markers.current.forEach(m => m.remove()); markers.current = []; endpointHandles = []; midpointHandles = []; editingPaths.clear();vertexHandles=[];snapTargets=[];groundPoints=[];groundMidpoints=[];
+      markers.current.forEach(m => m.remove()); markers.current = [];objectLabelMarkers=[]; endpointHandles = []; midpointHandles = []; editingPaths.clear();vertexHandles=[];snapTargets=[];groundPoints=[];groundMidpoints=[];
       if (p.labels) for (const o of p.project.objects) {
-        const node = document.createElement('button'); node.type = 'button'; node.dataset.kind=o.kind; node.className = `map-label ${p.selected === o.id ? 'selected' : ''}`;
+        if(o.kind==='tree'||o.kind==='waterArea'||o.kind==='scenery')continue;
+        const node = document.createElement('button'); node.type = 'button'; node.dataset.kind=o.kind; node.className = `map-label ${p.selected === o.id ? 'selected' : ''}${o.customModel&&p.mode==='3d'?' map-label-custom-model':''}`;
         if(o.kind==='medical'||o.kind==='defib')node.classList.add('map-label-safety',`map-label-${o.kind}`);
         node.style.setProperty('--object-color', kinds[o.kind].color);node.style.setProperty('--object-ink',objectIconInk(o.kind)); node.style.pointerEvents = p.tool === 'select'||p.tool==='preview' ? 'auto' : 'none';
         const icon = document.createElement('span');icon.className='map-label-icon';icon.append(createObjectIcon(o.kind));
@@ -289,14 +316,16 @@ export default function MapCanvas(props: Props) {
         node.append(icon, name); node.title = `${o.name}${o.kind==='medical'&&o.hasDefib?' ? Defibrillator available':''} · ${o.width} × ${o.depth} m${p.selected === o.id ? ' · drag to move' : ''}`;
         node.setAttribute('aria-label', `${p.tool==='preview'?(p.selected===o.id?'Hide name for':'Show name for'):'Select'} ${o.name}${o.kind==='medical'&&o.hasDefib?' - Defibrillator available':''}`);
         if(p.tool==='preview')node.setAttribute('aria-pressed',String(p.selected===o.id));
+        node.addEventListener('pointerdown',event=>{if(p.selected===o.id&&p.tool==='select')startObjectDrag(event,true);});
         node.addEventListener('click', e => { e.stopPropagation(); latest.current.onClick(o.position, o.id); });
         const marker = new maplibregl.Marker({ element: node, anchor: 'bottom', offset: [0, -8], draggable: p.selected === o.id && p.tool === 'select' }).setLngLat(o.position).addTo(map);
-        marker.on('drag', () => { const at = marker.getLngLat(); const updated = { ...latest.current.project, objects: latest.current.project.objects.map(item => item.id === o.id ? { ...item, position: [at.lng, at.lat] as Coord } : item) }; set('objects', objectFeatures(updated, o.id)); });
+        objectLabelMarkers.push({marker,id:o.id});
+        marker.on('drag', () => { const at = marker.getLngLat(); const updated = { ...latest.current.project, objects: latest.current.project.objects.map(item => item.id === o.id ? { ...item, position: [at.lng, at.lat] as Coord } : item) }; set('objects', objectFeatures(updated, o.id));objectModels.update(updated,latest.current.mode); });
         marker.on('dragend', () => { const at = marker.getLngLat(); latest.current.onMove(o.id, [at.lng, at.lat]); });
         markers.current.push(marker);
       }
       const linked=connectedPathIds(p.project,p.selected),seenVertices=new Set<string>();
-      const editablePaths=p.project.paths.filter(path=>linked.has(path.id)).sort((a,b)=>Number(b.id===p.selected)-Number(a.id===p.selected));
+      const editablePaths=(p.pathVertices?.length?p.project.paths:p.project.paths.filter(path=>linked.has(path.id))).sort((a,b)=>Number(b.id===p.selected)-Number(a.id===p.selected));
       for(const path of editablePaths)if(p.tool==='select'){
         editingPaths.set(path.id,path.points);
         const closed = JSON.stringify(path.points[0]) === JSON.stringify(path.points.at(-1));
@@ -305,15 +334,19 @@ export default function MapCanvas(props: Props) {
           if ((!closed || index < path.points.length - 1) && !seenVertices.has(pointKey)) {
           seenVertices.add(pointKey);
           const node = document.createElement('button'); node.type = 'button';
-          node.className = `path-vertex ${p.selected===path.id && p.pathVertex === index ? 'active' : ''}`;
+          // A single restriction is attached to the selected point (the segment
+          // beginning there); don't color both endpoint markers for that segment.
+          const notStepFreePoint=path.pointAccess?.[index]==='notStepFree';
+          node.className = `path-vertex ${notStepFreePoint?'not-step-free':''} ${p.selected===path.id && p.pathVertex === index ? 'active' : ''} ${p.pathVertices?.some(selected=>selected.pathId===path.id&&selected.index===index) ? 'range-selected' : ''}`;
           node.setAttribute('aria-label',p.selected===path.id?`Path point ${index+1}`:`${path.name} point ${index+1}`);node.dataset.pathId=path.id;
           node.title = `Point ${index + 1} · drag to move, right-click to remove`;
-          node.addEventListener('click', e => { e.stopPropagation(); node.focus({ preventScroll: true }); latest.current.onPathSelect(path.id,index); });
+          node.addEventListener('click', e => { e.stopPropagation(); node.focus({ preventScroll: true }); latest.current.onPathSelect(path.id,index,(e as MouseEvent).shiftKey); });
           node.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); latest.current.onPathRemove(path.id, index); });
           node.addEventListener('keydown', e => { if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); latest.current.onPathRemove(path.id, index); } });
           const marker = new maplibregl.Marker({ element: node, anchor: 'center', draggable: true }).setLngLat(point).addTo(map);
           marker.on('drag', () => {
             const at = marker.getLngLat(); const next = moveConnectedPathVertex(latest.current.project,path.id,index,[at.lng,at.lat]);
+            decks.update(next,latest.current.selected,latest.current.mode,latest.current.route);
             const paths=pathFeatures(next,path.id);set('paths',paths);set('path-outlines',pathOutlineFeatures(paths));
             editingPaths=new Map(next.paths.map(path=>[path.id,path.points]));positionEnds();
           });
@@ -377,6 +410,7 @@ export default function MapCanvas(props: Props) {
       };
       if(p.tool==='path' || p.tool==='extend-start' || p.tool==='extend-end') {
         for(const route of p.project.paths)route.points.forEach((at,index)=>{
+          if(pathVertexKey(route,index)!=='height:0.000')return;
           const last=route.points.length-1,closed=JSON.stringify(route.points[0])===JSON.stringify(route.points[last]);
           if(closed && index===last)return;
           if(route.id===p.selected && ((p.tool==='extend-start' && index===0) || (p.tool==='extend-end' && index===last)))return;
@@ -390,19 +424,96 @@ export default function MapCanvas(props: Props) {
     }
     const updateListener = () => update(); el.current!.addEventListener('project-update', updateListener);
     map.on('move', positionEnds);
+    let referencePopup:maplibregl.Popup|null=null;
+    let objectDrag:{id:string;pointerId:number;start:{x:number;y:number};ground:Coord;origin:Coord;position:Coord;moved:boolean;panEnabled:boolean}|null=null;
+    let objectClickBlockedUntil=0;
+    const showObjectPosition=(id:string,position:Coord)=>{
+      const project={...latest.current.project,objects:latest.current.project.objects.map(object=>object.id===id?{...object,position}:object)};
+      (map.getSource('objects') as GeoJSONSource).setData(objectFeatures(project,id));
+      objectModels.update(project,latest.current.mode);
+    };
+    const finishObjectDrag=(commit:boolean)=>{
+      const drag=objectDrag;if(!drag)return;objectDrag=null;
+      if(canvas.hasPointerCapture(drag.pointerId))canvas.releasePointerCapture(drag.pointerId);
+      if(drag.panEnabled)map.dragPan.enable();
+      canvas.style.cursor='grab';
+      if(drag.moved){
+        objectClickBlockedUntil=Date.now()+300;
+        if(commit)latest.current.onMove(drag.id,drag.position);
+        else if(ready&&map.getSource('objects'))showObjectPosition(drag.id,drag.origin);
+      }
+    };
+    startObjectDrag=(event:PointerEvent,fromLabel=false)=>{
+      const current=latest.current;
+      if(!ready||current.tool!=='select'||event.button!==0||!event.isPrimary||objectDrag)return;
+      const selected=current.project.objects.find(object=>object.id===current.selected);
+      if(!selected)return;
+      const bounds=canvas.getBoundingClientRect(),point={x:event.clientX-bounds.left,y:event.clientY-bounds.top};
+      if(!fromLabel){const hit=objectModels.pick(point)??map.queryRenderedFeatures([point.x,point.y],{layers:['objects-flat','objects-3d','camping']})[0]?.properties?.id;if(hit!==selected.id)return;}
+      event.preventDefault();event.stopPropagation();map.stop();
+      const ground=map.unproject([point.x,point.y]);
+      objectDrag={id:selected.id,pointerId:event.pointerId,start:point,ground:[ground.lng,ground.lat],origin:selected.position,position:selected.position,moved:false,panEnabled:map.dragPan.isEnabled()};
+      map.dragPan.disable();canvas.setPointerCapture(event.pointerId);canvas.style.cursor='grabbing';
+    };
+    const moveObjectDrag=(event:PointerEvent)=>{
+      const drag=objectDrag;if(!drag||event.pointerId!==drag.pointerId)return;
+      event.preventDefault();event.stopPropagation();
+      const bounds=canvas.getBoundingClientRect(),point={x:event.clientX-bounds.left,y:event.clientY-bounds.top};
+      if(!drag.moved&&Math.hypot(point.x-drag.start.x,point.y-drag.start.y)<4)return;
+      const ground=map.unproject([point.x,point.y]);
+      drag.moved=true;drag.position=[drag.origin[0]+ground.lng-drag.ground[0],drag.origin[1]+ground.lat-drag.ground[1]];
+      showObjectPosition(drag.id,drag.position);
+    };
+    const endObjectDrag=(event:PointerEvent)=>{if(objectDrag?.pointerId===event.pointerId)finishObjectDrag(event.type==='pointerup');};
+    const cancelObjectDrag=()=>finishObjectDrag(false);
+    const escapeObjectDrag=(event:KeyboardEvent)=>{if(event.key==='Escape')cancelObjectDrag();};
+    canvas.addEventListener('pointerdown',startObjectDrag,{capture:true});
+    window.addEventListener('pointermove',moveObjectDrag,{capture:true,passive:false});
+    window.addEventListener('pointerup',endObjectDrag,true);window.addEventListener('pointercancel',endObjectDrag,true);
+    window.addEventListener('blur',cancelObjectDrag);window.addEventListener('keydown',escapeObjectDrag);
+    map.on('remove',()=>{
+      cancelObjectDrag();canvas.removeEventListener('pointerdown',startObjectDrag,true);
+      window.removeEventListener('pointermove',moveObjectDrag,true);window.removeEventListener('pointerup',endObjectDrag,true);window.removeEventListener('pointercancel',endObjectDrag,true);
+      window.removeEventListener('blur',cancelObjectDrag);window.removeEventListener('keydown',escapeObjectDrag);
+    });
     map.on('click', e => {
       const p = latest.current; if (!ready) return;
+      if(Date.now()<objectClickBlockedUntil)return;
+      if(p.tool==='measure')return;
+      referencePopup?.remove();referencePopup=null;
       const target=nearestTarget(e.point);if(target){p.onConnect(target.at,target.closeLoop);return;}
       const hits = map.queryRenderedFeatures(e.point, { layers: ['objects-flat', 'objects-3d', 'paths', 'areas-flat', 'areas-3d', 'camping'] });
+      const deckHit=decks.pick(e.point),modelHit=objectModels.pick(e.point),hitId=deckHit?.id??modelHit??hits[0]?.properties?.id;
+      if(p.tool==='select' && !hits.length&&!deckHit&&!modelHit){
+        const reference=map.queryRenderedFeatures([[e.point.x-5,e.point.y-5],[e.point.x+5,e.point.y+5]],{layers:['tracing-reference-points','tracing-reference-lines','tracing-reference-fill','tracing-reference-labels']})[0];
+        if(reference){
+          const content=document.createElement('div'),name=document.createElement('strong'),details=document.createElement('div');
+          name.textContent=String(reference.properties?.name||'Unnamed reference feature');
+          details.textContent=`${reference.properties?.layerName||'Reference layer'} · ${reference.geometry.type} · Locked reference`;
+          content.append(name,details);
+          referencePopup=new maplibregl.Popup({closeButton:true,maxWidth:'280px'}).setLngLat(e.lngLat).setDOMContent(content).addTo(map);
+          return;
+        }
+      }
       const at=resolveDrawingPoint([e.lngLat.lng,e.lngLat.lat],e.point,e.originalEvent.shiftKey);
-      p.onClick(at, p.tool === 'select'||p.tool==='preview' ? hits[0]?.properties?.id : undefined);
+      const clickedPath=p.project.paths.find(path=>path.id===hitId);
+      let clickedSection=deckHit?.section??Number(hits[0]?.properties?.segmentStart??0);
+      if(p.tool==='select'&&clickedPath){p.onClick(at,clickedPath.id);return;}
+      if(p.tool==='preview'&&clickedPath){
+        const content=document.createElement('div'),name=document.createElement('strong'),details=document.createElement('div');
+        name.textContent=clickedPath.name;
+        details.textContent=`${pathTypes[clickedPath.segmentTypes?.[clickedSection]??'standard']} · ${pathAccess[clickedPath.segmentAccess?.[clickedSection]??'unknown']} (reported by the map owner)`;
+        content.append(name,details);referencePopup=new maplibregl.Popup({closeButton:true,maxWidth:'280px'}).setLngLat(e.lngLat).setDOMContent(content).addTo(map);return;
+      }
+      p.onClick(at, p.tool === 'select'||p.tool==='preview' ? hitId : undefined);
     });
     let lastCursor = 0; map.on('mousemove', e => {
+      if(objectDrag){canvas.style.cursor='grabbing';return;}
       pointer={x:e.point.x,y:e.point.y};shiftHeld=e.originalEvent.shiftKey;renderDraft();
       if(ready && snapTargets.length){const target=nearestTarget(e.point);snapTargets.forEach(t=>t.node.classList.toggle('snap-highlight',t===target));map.getCanvas().style.cursor=target?'pointer':'crosshair';}
       if (ready && latest.current.tool === 'select') {
         const hits = map.queryRenderedFeatures(e.point, { layers: ['objects-flat', 'objects-3d', 'paths', 'areas-flat', 'areas-3d', 'camping'] });
-        map.getCanvas().style.cursor = hits.length ? 'pointer' : 'grab';
+        map.getCanvas().style.cursor = decks.pick(e.point)||objectModels.pick(e.point)||hits.length ? 'pointer' : 'grab';
       }
       if (Date.now() - lastCursor > 100) { lastCursor = Date.now(); latest.current.onCursor([e.lngLat.lng, e.lngLat.lat]); }
     });
@@ -410,9 +521,9 @@ export default function MapCanvas(props: Props) {
     map.on('move',renderDraft);window.addEventListener('keydown',shiftChange);window.addEventListener('keyup',shiftChange);
     map.on('error', e => { if (latest.current.reference) latest.current.onError(`Reference tiles could not load. Your event layout is still editable. ${e.error?.message?.slice(0, 80) ?? ''}`); });
     const resize = new ResizeObserver(() => map.resize()); resize.observe(el.current!);
-    return () => { cancelAnimationFrame(labelFrame);map.off('rotate',renderGpsHeading);map.off('move',scheduleLabels);map.off('resize',scheduleLabels);canvas.removeEventListener('pointerdown', manualInteraction); canvas.removeEventListener('touchstart', manualInteraction); canvas.removeEventListener('wheel', manualInteraction); ready = false;lengthLabel.remove();window.removeEventListener('keydown',shiftChange);window.removeEventListener('keyup',shiftChange);map.off('move',renderDraft); resize.disconnect(); el.current?.removeEventListener('project-update', updateListener); map.off('move', positionEnds); endpointHandles = []; markers.current.forEach(m => m.remove()); map.remove(); mapRef.current = null; props.actions.current = null; };
+    return () => { cancelAnimationFrame(labelFrame);map.off('rotate',renderGpsHeading);map.off('move',scheduleLabels);map.off('resize',scheduleLabels);canvas.removeEventListener('pointerdown', manualInteraction); canvas.removeEventListener('touchstart', manualInteraction); canvas.removeEventListener('wheel', manualInteraction); ready = false;lengthLabel.remove();window.removeEventListener('keydown',shiftChange);window.removeEventListener('keyup',shiftChange);map.off('move',renderDraft); resize.disconnect(); el.current?.removeEventListener('project-update', updateListener); map.off('move', positionEnds); endpointHandles = []; markers.current.forEach(m => m.remove()); map.remove(); mapRef.current = null;latest.current.onMapReady?.(null); props.actions.current = null; };
   }, []);
-  useEffect(() => { el.current?.dispatchEvent(new Event('project-update')); }, [props.route, props.project, props.selected, props.tool, props.reference, props.ground,props.boundary,props.groundVertex, props.grid, props.labels, props.draft, props.target, props.pathVertex]);
+  useEffect(() => { el.current?.dispatchEvent(new Event('project-update')); }, [props.pathType,props.draftTypes,props.route, props.project, props.selected, props.tool, props.reference, props.ground,props.boundary,props.groundVertex, props.grid, props.labels, props.draft, props.target, props.pathVertex,props.pathVertices]);
   useEffect(() => { const map = mapRef.current; if (!map) return; map.easeTo({ pitch: props.mode === '3d' ? 55 : 0, duration: 550 }); el.current?.dispatchEvent(new Event('project-update')); }, [props.mode]);
   return <div ref={el} className="map-canvas" aria-label="Interactive geographically aligned event map" />;
 }

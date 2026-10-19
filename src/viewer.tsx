@@ -52,11 +52,12 @@ function Viewer({ project, accent, logo, backgroundMap }: { project: EventProjec
     document.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
   }, [places, routingOpen]);
-  const [routeFrom,setRouteFrom] = useState(project.objects.find(o=>o.kind==='entrance'||o.kind==='start')?.id ?? project.objects[0]?.id ?? 'gps'), [routeTo,setRouteTo] = useState('');
+  const visitorObjects=project.objects.filter(object=>object.kind!=='waterArea'&&object.kind!=='scenery');
+  const [routeFrom,setRouteFrom] = useState(visitorObjects.find(o=>o.kind==='entrance'||o.kind==='start')?.id ?? visitorObjects[0]?.id ?? 'gps'), [routeTo,setRouteTo] = useState('');
   const [gpsFix,setGpsFix] = useState<ViewerPosition | null>(null);
   const [quickRouting,setQuickRouting]=useState(false);
   const selectMapPlace=(id?:string)=>{
-    const destination=id?project.objects.find(o=>o.id===id):undefined;
+    const destination=id?visitorObjects.find(o=>o.id===id):undefined;
     const next=destination&&selectedPlace!==destination.id?destination.id:null;
     setSelectedPlace(next);
     if(!next){if(quickRouting)setRoutingActive(false);setQuickRouting(false);return;}
@@ -68,7 +69,7 @@ function Viewer({ project, accent, logo, backgroundMap }: { project: EventProjec
   const network = useMemo(()=>createPathNetwork(project),[project]);
   const routeResult = useMemo(()=>{
     if(!routingActive || !routeTo)return {route:null,error:''};
-    const to=project.objects.find(o=>o.id===routeTo), from=project.objects.find(o=>o.id===routeFrom);
+    const to=visitorObjects.find(o=>o.id===routeTo), from=visitorObjects.find(o=>o.id===routeFrom);
     if(!to)return {route:null,error:'Choose a destination.'};
     if(routeFrom==='gps' && (!gpsFix || Date.now()-gpsFix.timestamp>60000))return {route:null,error:'Tap the GPS button to get your current location, then try again.'};
     try {return {route:shortestRoute(network,routeFrom==='gps'?[gpsFix!.coords.longitude,gpsFix!.coords.latitude]:from!.position,to.position),error:''};}
@@ -87,14 +88,14 @@ function Viewer({ project, accent, logo, backgroundMap }: { project: EventProjec
     <button className="visitor-places-button primary" onClick={() => { setPlaces(v => !v);setRoutingOpen(false); }} aria-expanded={places}><MapPin size={17}/>Find a place</button>
     <button className="visitor-route-button primary" aria-expanded={routingOpen} onClick={()=>{setRoutingOpen(v=>!v);setPlaces(false);}}>Directions</button>
     {routingOpen && <aside className="visitor-routing"><header><h2>Shortest route</h2><button aria-label="Close directions" onClick={()=>setRoutingOpen(false)}><X size={19}/></button></header>
-      <label>From<select aria-label="Route start" value={routeFrom} onChange={e=>{setQuickRouting(false);setRouteFrom(e.target.value);}}><option value="gps">My GPS location</option>{project.objects.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
-      <label>To<select aria-label="Route destination" value={routeTo} onChange={e=>{setQuickRouting(false);setRouteTo(e.target.value);}}><option value="">Choose a place</option>{project.objects.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
+      <label>From<select aria-label="Route start" value={routeFrom} onChange={e=>{setQuickRouting(false);setRouteFrom(e.target.value);}}><option value="gps">My GPS location</option>{visitorObjects.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
+      <label>To<select aria-label="Route destination" value={routeTo} onChange={e=>{setQuickRouting(false);setRouteTo(e.target.value);}}><option value="">Choose a place</option>{visitorObjects.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
       <div><button className="primary" disabled={!routeTo} onClick={()=>{setQuickRouting(false);setRoutingActive(true);}}>Show route</button><button className="ghost" onClick={()=>{setQuickRouting(false);setRoutingActive(false);}}>Clear route</button></div>
       {routeResult.error && <p role="alert">{routeResult.error}</p>}
       {routeResult.route && <p role="status"><strong>{Math.round(routeResult.route.distance)} m along paths</strong>{routeResult.route.accessDistance>1 && <span> + {Math.round(routeResult.route.accessDistance)} m to/from paths</span>}</p>}
       <p>Solid blue follows connected paths. Dashed links to places are straight-line connections; check access on the ground. Crossings connect only at shared path points.</p>
     </aside>}
-    {places && <aside className="visitor-places"><header><h2>Places</h2><button aria-label="Close places" onClick={() => setPlaces(false)}><X size={19}/></button></header><input aria-label="Search places" placeholder="Stage, toilets, water…" value={search} onChange={e => setSearch(e.target.value)}/><div>{project.objects.filter(o => `${o.name} ${objectTypeLabel(o)}`.toLowerCase().includes(search.toLowerCase())).map(o => {const Icon=objectIcons[o.kind];return <button key={o.id} onClick={() => { pauseLock(); actions.current?.locate(o.position,{preserveZoom:true,from:gpsFix&&Date.now()-gpsFix.timestamp<=60000?[gpsFix.coords.longitude,gpsFix.coords.latitude]:undefined,pointTowards:true}); selectMapPlace(o.id); setPlaces(false); }}><span className="visitor-place-icon" style={{ background: kinds[o.kind].color, color:objectIconInk(o.kind) }}><Icon size={18}/></span><strong>{o.name}</strong><small>{objectTypeLabel(o)}</small></button>;})}{!project.objects.some(o => `${o.name} ${objectTypeLabel(o)}`.toLowerCase().includes(search.toLowerCase())) && <p>No places found.</p>}</div></aside>}
+    {places && <aside className="visitor-places"><header><h2>Places</h2><button aria-label="Close places" onClick={() => setPlaces(false)}><X size={19}/></button></header><input aria-label="Search places" placeholder="Stage, toilets, water…" value={search} onChange={e => setSearch(e.target.value)}/><div>{visitorObjects.filter(o => `${o.name} ${objectTypeLabel(o)}`.toLowerCase().includes(search.toLowerCase())).map(o => {const Icon=objectIcons[o.kind];return <button key={o.id} onClick={() => { pauseLock(); actions.current?.locate(o.position,{preserveZoom:true,from:gpsFix&&Date.now()-gpsFix.timestamp<=60000?[gpsFix.coords.longitude,gpsFix.coords.latitude]:undefined,pointTowards:true}); selectMapPlace(o.id); setPlaces(false); }}><span className="visitor-place-icon" style={{ background: kinds[o.kind].color, color:objectIconInk(o.kind) }}><Icon size={18}/></span><strong>{o.name}</strong><small>{objectTypeLabel(o)}</small></button>;})}{!visitorObjects.some(o => `${o.name} ${objectTypeLabel(o)}`.toLowerCase().includes(search.toLowerCase())) && <p>No places found.</p>}</div></aside>}
     {quickRouting && routingActive && !routingOpen && gpsFix && routeResult.error && <div className="visitor-error" role="alert">{routeResult.error}<button aria-label="Dismiss route message" onClick={()=>{setRoutingActive(false);setQuickRouting(false);}}><X size={15}/></button></div>}
     {gpsError && <div className="visitor-gps-error" role="alert">{gpsError}<button aria-label="Dismiss GPS message" onClick={() => setGpsError('')}><X size={15}/></button></div>}
     {error && <div className="visitor-error" role="status">{error}<button aria-label="Dismiss message" onClick={() => setError('')}><X size={15}/></button></div>}

@@ -1,35 +1,60 @@
-import { pathCenterline, type Coord, type EventProject } from './model';
-type Edge = { to: number; length: number; width: number };
-type Segment = { a: number; b: number; length: number; width: number };
-export type PathNetwork = { points: Coord[]; xy: Coord[]; edges: Edge[][]; segments: Segment[]; origin: Coord; scale: number };
-export type WalkingRoute = { points: Coord[]; access: Coord[][]; distance: number; accessDistance: number };
+import { bridgePaths, pathProfile, pathSections, type Coord, type EventProject } from './model';
+type Edge = { to: number; length: number; width: number; wheelchairAccessible: boolean; isBridge: boolean };
+type Segment = { a: number; b: number; length: number; width: number; wheelchairAccessible: boolean; isBridge: boolean };
+export type PathNetwork = { points: Coord[]; heights:number[];xy: Coord[]; edges: Edge[][]; segments: Segment[]; inaccessiblePoints:Set<number>; origin: Coord; scale: number };
+export type WalkingRoute = { points: Coord[];heights?:number[]; access: Coord[][]; distance: number; accessDistance: number; usesBridge:boolean };
 const distance = (a: Coord, b: Coord) => Math.hypot(a[0]-b[0], a[1]-b[1]);
 const projectPoint = (n: Pick<PathNetwork,'origin'|'scale'>, p: Coord): Coord => [(p[0]-n.origin[0])*n.scale, (p[1]-n.origin[1])*111195];
 
 export function createPathNetwork(project: EventProject): PathNetwork {
-  const network: PathNetwork = { points: [], xy: [], edges: [], segments: [], origin: project.center, scale: 111195*Math.cos(project.center[1]*Math.PI/180) };
+  const network: PathNetwork = { points: [],heights:[], xy: [], edges: [], segments: [], inaccessiblePoints:new Set(), origin: project.center, scale: 111195*Math.cos(project.center[1]*Math.PI/180) };
   const ids = new Map<string, number>();
-  const node = (p: Coord) => {
-    const key = `${p[0].toFixed(9)},${p[1].toFixed(9)}`;
-    if (ids.has(key)) return ids.get(key)!;
-    const id = network.points.length; ids.set(key,id); network.points.push(p); network.xy.push(projectPoint(network,p)); network.edges.push([]); return id;
-  };
-  for (const path of project.paths) {
-    const points = pathCenterline(path);
-    for (let i=1;i<points.length;i++) {
-      const a=node(points[i-1]), b=node(points[i]), length=distance(network.xy[a],network.xy[b]);
-      if (length < .001) continue;
-      network.segments.push({a,b,length,width:path.width}); network.edges[a].push({to:b,length,width:path.width}); network.edges[b].push({to:a,length,width:path.width});
+  const coordinateKey=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
+  const blockedPointKeys=new Set<string>();
+  const coveredBridgeSegments=new Set<string>(),blockedBridgeSegments=new Set<string>();
+  for(const bridge of project.bridges??[]){
+    const sourceKeys=new Set((bridge.sourcePoints??[]).map(coordinateKey));
+    for(const path of project.paths){
+      const indices=path.points.flatMap((point,index)=>sourceKeys.has(coordinateKey(point))?[index]:[]);
+      if(indices.length<2)continue;
+      for(let index=Math.min(...indices);index<Math.max(...indices);index++){
+        const key=`${path.id}:${index}`;coveredBridgeSegments.add(key);
+        if(!bridge.wheelchairAccessible)blockedBridgeSegments.add(key);
+      }
     }
   }
+  const node = (p: Coord,level:number,height:number,physical:boolean) => {
+    const key = `${p[0].toFixed(9)},${p[1].toFixed(9)},${physical||level===0?'height:'+height.toFixed(3):'type:'+level}`;
+    if (ids.has(key)) return ids.get(key)!;
+    const id = network.points.length; ids.set(key,id); network.points.push(p);network.heights.push(height); network.xy.push(projectPoint(network,p)); network.edges.push([]); return id;
+  };
+  for (const path of [...project.paths,...bridgePaths(project.bridges)]) {
+    path.pointAccess?.forEach((access,index)=>{if(access==='notStepFree')blockedPointKeys.add(coordinateKey(path.points[index]));});
+    for(const section of pathSections(path)){
+    const samples=pathProfile(section.path),points=samples.map(sample=>sample.position),level=section.type==='bridge'?1:section.type==='underpass'?-1:0;
+    const legacyPath=project.paths.some(candidate=>candidate.id===path.id);
+    for (let i=1;i<points.length;i++) {
+      const pathSegment=section.start+Math.min(samples[i-1].segment,samples[i].segment);
+      const access=path.segmentAccess?.[section.start];
+      const isBridge=section.type==='bridge'||(legacyPath&&coveredBridgeSegments.has(`${path.id}:${pathSegment}`));
+      const wheelchairAccessible=(section.type!=='bridge'||access==='stepFree')&&!(legacyPath&&blockedBridgeSegments.has(`${path.id}:${pathSegment}`));
+      const physical=path.heights?.some(height=>height>0)??false;
+      const a=node(points[i-1],i===1?0:level,samples[i-1].height,physical), b=node(points[i],i===points.length-1?0:level,samples[i].height,physical), length=Math.hypot(distance(network.xy[a],network.xy[b]),samples[i].height-samples[i-1].height);
+      if (length < .001) continue;
+      network.segments.push({a,b,length,width:path.width,wheelchairAccessible,isBridge}); network.edges[a].push({to:b,length,width:path.width,wheelchairAccessible,isBridge}); network.edges[b].push({to:a,length,width:path.width,wheelchairAccessible,isBridge});
+    }
+    }
+  }
+  network.points.forEach((point,index)=>{if(blockedPointKeys.has(coordinateKey(point)))network.inaccessiblePoints.add(index);});
   return network;
 }
 
-export function shortestRoute(network: PathNetwork, from: Coord, to: Coord, avoidReverse?: [Coord,Coord]): WalkingRoute {
-  if (!network.segments.length) throw new Error('This map has no paths to route along yet.');
+export function shortestRoute(network: PathNetwork, from: Coord, to: Coord, avoidReverse?: [Coord,Coord], stepFreeOnly=false, avoidBridges=false): WalkingRoute {
+  const routableSegments=network.segments.filter(segment=>(!stepFreeOnly||segment.wheelchairAccessible)&&(!avoidBridges||!segment.isBridge));
+  if (!routableSegments.length) throw new Error(avoidBridges?'No route is available without bridges.':stepFreeOnly?'No step-free route is available. Check the path and bridge access markings.':'This map has no paths to route along yet.');
   const snap = (p: Coord) => {
     const xy=projectPoint(network,p); let best: {segment:Segment;index:number;t:number;gap:number;at:Coord}|undefined;
-    network.segments.forEach((segment,index) => {
+    routableSegments.forEach((segment,index) => {
       const a=network.xy[segment.a],b=network.xy[segment.b],dx=b[0]-a[0],dy=b[1]-a[1];
       const t=Math.max(0,Math.min(1,((xy[0]-a[0])*dx+(xy[1]-a[1])*dy)/(dx*dx+dy*dy)));
       const gap=distance(xy,[a[0]+dx*t,a[1]+dy*t]);
@@ -50,14 +75,14 @@ export function shortestRoute(network: PathNetwork, from: Coord, to: Coord, avoi
     return Math.min(length,Math.max(first,last))-Math.max(0,Math.min(first,last))>.01;
   };
   const extras=new Map<number,Edge[]>();
-  const link=(a:number,b:number,length:number,width:number) => { extras.set(a,[...(extras.get(a)??[]),{to:b,length,width}]); extras.set(b,[...(extras.get(b)??[]),{to:a,length,width}]); };
-  for (const [id,s] of [[startId,start],[endId,end]] as const) { link(id,s.segment.a,s.t*s.segment.length,s.segment.width); link(id,s.segment.b,(1-s.t)*s.segment.length,s.segment.width); }
-  if (start.index===end.index) link(startId,endId,Math.abs(start.t-end.t)*start.segment.length,start.segment.width);
+  const link=(a:number,b:number,length:number,width:number,wheelchairAccessible:boolean,isBridge:boolean) => { extras.set(a,[...(extras.get(a)??[]),{to:b,length,width,wheelchairAccessible,isBridge}]); extras.set(b,[...(extras.get(b)??[]),{to:a,length,width,wheelchairAccessible,isBridge}]); };
+  for (const [id,s] of [[startId,start],[endId,end]] as const) { link(id,s.segment.a,s.t*s.segment.length,s.segment.width,s.segment.wheelchairAccessible,s.segment.isBridge); link(id,s.segment.b,(1-s.t)*s.segment.length,s.segment.width,s.segment.wheelchairAccessible,s.segment.isBridge); }
+  if (start.index===end.index) link(startId,endId,Math.abs(start.t-end.t)*start.segment.length,start.segment.width,start.segment.wheelchairAccessible,start.segment.isBridge);
   // Distance is primary. Among equal lengths, minimise distance / width.
   // This prefers consistently wider paths without taking a longer detour.
   type Cost={cost:number;narrowness:number};
   const better=(a:Cost,b:Cost)=>a.cost<b.cost-1e-6||(Math.abs(a.cost-b.cost)<=1e-6&&a.narrowness<b.narrowness-1e-9);
-  const costs=new Map<number,Cost>([[startId,{cost:0,narrowness:0}]]),previous=new Map<number,number>();
+  const costs=new Map<number,Cost>([[startId,{cost:0,narrowness:0}]]),previous=new Map<number,number>(),previousBridge=new Map<number,boolean>();
   const heap:({id:number}&Cost)[]=[];
   const push=(item:typeof heap[number])=>{let i=heap.length;heap.push(item);while(i>0){const parent=(i-1)>>1;if(!better(item,heap[parent]))break;heap[i]=heap[parent];i=parent;}heap[i]=item;};
   const pop=()=>{const first=heap[0],last=heap.pop()!;if(heap.length){let i=0;while(i*2+1<heap.length){let child=i*2+1;if(child+1<heap.length&&better(heap[child+1],heap[child]))child++;if(!better(heap[child],last))break;heap[i]=heap[child];i=child;}heap[i]=last;}return first;};
@@ -67,15 +92,24 @@ export function shortestRoute(network: PathNetwork, from: Coord, to: Coord, avoi
     if(current.cost!==known?.cost||current.narrowness!==known.narrowness)continue;
     if(current.id===endId)break;
     for(const edge of [...(network.edges[current.id]??[]),...(extras.get(current.id)??[])]){
+      if(stepFreeOnly&&(network.inaccessiblePoints.has(current.id)||network.inaccessiblePoints.has(edge.to)))continue;
+      if((stepFreeOnly&&!edge.wheelchairAccessible)||(avoidBridges&&edge.isBridge))continue;
       if(reverseBlocked(current.id,edge.to))continue;
       const next={cost:current.cost+edge.length,narrowness:current.narrowness+edge.length/Math.max(.5,edge.width)};
       if(better(next,costs.get(edge.to)??{cost:Infinity,narrowness:Infinity})){
-        costs.set(edge.to,next);previous.set(edge.to,current.id);push({id:edge.to,...next});
+        costs.set(edge.to,next);previous.set(edge.to,current.id);previousBridge.set(edge.to,edge.isBridge);push({id:edge.to,...next});
       }
     }
   }
-  const total=costs.get(endId)?.cost;if(total===undefined)throw new Error('These paths are not connected. Join them in the designer before routing between these places.');
+  const total=costs.get(endId)?.cost;
+  if(total===undefined){
+    if(stepFreeOnly)throw new Error('No step-free route connects these places. Please ask event staff for help finding an alternative.');
+    if(avoidBridges)throw new Error('No route connects these places without bridges.');
+    throw new Error('These paths are not connected. Join them in the designer before routing between these places.');
+  }
   const ids=[endId];while(ids[0]!==startId)ids.unshift(previous.get(ids[0])!);
   const points=ids.map(id=>id===startId?start.at:id===endId?end.at:network.points[id]);
-  return { points, distance: total, accessDistance:start.gap+end.gap, access:[[from,start.at],[end.at,to]] };
+  const height=(snap:typeof start)=>network.heights[snap.segment.a]+(network.heights[snap.segment.b]-network.heights[snap.segment.a])*snap.t;
+  const heights=ids.map(id=>id===startId?height(start):id===endId?height(end):network.heights[id]);
+  return { points,heights, distance: total, accessDistance:start.gap+end.gap, access:[[from,start.at],[end.at,to]],usesBridge:ids.slice(1).some(id=>previousBridge.get(id)===true) };
 }

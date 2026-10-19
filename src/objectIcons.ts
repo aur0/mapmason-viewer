@@ -17,13 +17,17 @@ const definitions = {
   toilets: [ReactIcons.Toilet, SvgIcons.Toilet],
   food: [ReactIcons.Utensils, SvgIcons.Utensils],
   water: [ReactIcons.Droplets, SvgIcons.Droplets],
+  waterArea: [ReactIcons.Waves, SvgIcons.Waves],
   tent: [ReactIcons.Tent, SvgIcons.Tent],
+  tree: [ReactIcons.TreePine, SvgIcons.TreePine],
   medical: [ReactIcons.Cross, SvgIcons.Cross],
   defib: [ReactIcons.HeartPulse, SvgIcons.HeartPulse],
   camping: [ReactIcons.Tent, SvgIcons.Tent],
   parking: [ReactIcons.SquareParking, SvgIcons.SquareParking],
   entrance: [ReactIcons.DoorOpen, SvgIcons.DoorOpen],
   marker: [ReactIcons.MapPin, SvgIcons.MapPin],
+  custom: [ReactIcons.Box, SvgIcons.Box],
+  scenery: [ReactIcons.Trees, SvgIcons.Trees],
 } as const;
 export const objectIcons = Object.fromEntries(Object.entries(definitions).map(([kind,icons])=>[kind,icons[0]])) as Record<Kind, ReactIcons.LucideIcon>;
 export function createObjectIcon(kind: Kind): SVGElement {
