@@ -1,12 +1,13 @@
 import {offset,type Coord} from './model';
+import {applyPolyCutouts} from './polyCutouts';
 
 // AI feature reference: ./polyRendererGuide.ts. Update it and the assistant tool
 // schema/edit fields whenever validation, shape geometry or materials change.
 
-export type PolyShape='box'|'cylinder'|'roof'|'cone'|'wedge'|'pyramid'|'arch'|'text'|'sphere'|'extrusion'|'surface'|'line'|'tube';
+export type PolyShape='cutout'|'box'|'cylinder'|'roof'|'cone'|'wedge'|'pyramid'|'arch'|'text'|'sphere'|'extrusion'|'surface'|'line'|'tube';
 export const polyRoofProfiles=['curved','flat','gabled','hipped','barrel','pyramid'] as const;
 export type PolyRoofProfile=typeof polyRoofProfiles[number];
-export type PolyPart={shape:PolyShape;roofProfile?:PolyRoofProfile;endCaps?:boolean;openingWidth?:number;archRise?:number;crownThickness?:number;x:number;y:number;z:number;width:number;depth:number;height:number;rotation:number;color:string;frontColor?:string;topColor?:string;topRise?:number;topStep?:number;topStepAt?:number;tiltX?:number;tiltY?:number;topWidth?:number;topDepth?:number;rounding?:number;opacity?:number;emissive?:number;shadingStrength?:number;smoothShading?:boolean;group?:string;text?:string;outline?:[number,number][];path?:[number,number][];curve?:[number,number,number][];thickness?:number;radius?:number;endRadius?:number};
+export type PolyPart={cutoutSurface?:number;cutoutTargets?:number[];surfaceColors?:Record<string,string>;shape:PolyShape;roofProfile?:PolyRoofProfile;endCaps?:boolean;openingWidth?:number;archRise?:number;crownThickness?:number;x:number;y:number;z:number;width:number;depth:number;height:number;rotation:number;color:string;frontColor?:string;topColor?:string;topRise?:number;topStep?:number;topStepAt?:number;tiltX?:number;tiltY?:number;topWidth?:number;topDepth?:number;rounding?:number;opacity?:number;emissive?:number;shadingStrength?:number;smoothShading?:boolean;group?:string;text?:string;outline?:[number,number][];path?:[number,number][];curve?:[number,number,number][];thickness?:number;radius?:number;endRadius?:number};
 export type PolyTransform={pitch:number;roll:number;yaw:number;elevation:number};
 export type PolyModel={format:'mapmason-poly';version:1;name:string;parts:PolyPart[];transform?:PolyTransform};
 type PolyPoint=[number,number];
@@ -35,9 +36,15 @@ export function parsePolyModel(input:unknown):PolyModel{
   const number=(value:unknown,min:number,max:number)=>{if(typeof value!=='number'||!Number.isFinite(value)||value<min||value>max)throw Error(`Model dimensions must be between ${min} and ${max} metres.`);return value;};
   const parts=model.parts.map(value=>{
     if(!value||typeof value!=='object')throw Error('Invalid model part.');
-    const part=value as Record<string,unknown>,shapes:PolyShape[]=['box','cylinder','roof','cone','wedge','pyramid','arch','text','sphere','extrusion','surface','line','tube'];
+    const part=value as Record<string,unknown>,shapes:PolyShape[]=['cutout','box','cylinder','roof','cone','wedge','pyramid','arch','text','sphere','extrusion','surface','line','tube'];
     if(!shapes.includes(part.shape as PolyShape)||typeof part.color!=='string'||!/^#[0-9a-f]{6}$/i.test(part.color))throw Error('Model parts need a supported shape and hex colour.');
     const parsed:PolyPart={shape:part.shape as PolyShape,x:number(part.x,-200,200),y:number(part.y,-200,200),z:number(part.z,0,200),width:number(part.width,.01,200),depth:number(part.depth,.01,200),height:number(part.height,part.shape==='surface'||part.shape==='line'?0:.01,200),rotation:number(part.rotation,-360,360),color:part.color};
+    if(part.cutoutTargets!==undefined&&part.cutoutTargets!==null){
+      if(parsed.shape!=='cutout'||!Array.isArray(part.cutoutTargets)||part.cutoutTargets.length>96||part.cutoutTargets.some(target=>!Number.isInteger(target)||target<0||target>95))throw Error('Cutout targets must be part indices on a cutout box.');
+      parsed.cutoutTargets=[...new Set(part.cutoutTargets as number[])];
+    }
+    if(part.cutoutSurface!==undefined&&part.cutoutSurface!==null){if(parsed.shape!=='cutout'||!Number.isInteger(part.cutoutSurface)||Number(part.cutoutSurface)<0)throw Error('Cutout surface must be a non-negative surface index.');parsed.cutoutSurface=Number(part.cutoutSurface);}
+    if(parsed.shape==='cutout'){parsed.opacity=.08;parsed.emissive=0;}
     if(part.roofProfile!==undefined&&part.roofProfile!==null){
       if(parsed.shape!=='roof'||!polyRoofProfiles.includes(part.roofProfile as PolyRoofProfile))throw Error('Roof profile must be curved, flat, gabled, hipped, barrel or pyramid, on a roof part.');
       parsed.roofProfile=part.roofProfile as PolyRoofProfile;
@@ -58,12 +65,16 @@ export function parsePolyModel(input:unknown):PolyModel{
       if(rise>parsed.height)throw Error('Arch rise cannot exceed the total arch height.');
       if(parsed.crownThickness!==undefined&&parsed.crownThickness>rise-.01)throw Error('Arch crown thickness must be at least 0.01 metres smaller than the arch rise to leave an opening.');
     }
+    if(part.surfaceColors!==undefined&&part.surfaceColors!==null){
+      if(typeof part.surfaceColors!=='object'||Array.isArray(part.surfaceColors)||Object.entries(part.surfaceColors).some(([key,value])=>!/^\d+$/.test(key)||typeof value!=='string'||!/^#[0-9a-f]{6}$/i.test(value)))throw Error('Surface colours must map surface indices to hex colours.');
+      parsed.surfaceColors={...part.surfaceColors as Record<string,string>};
+    }
     if(part.frontColor!==undefined&&part.frontColor!==null){if(parsed.shape!=='box'||typeof part.frontColor!=='string'||!/^#[0-9a-f]{6}$/i.test(part.frontColor))throw Error('Front colour needs a box and a hex colour.');parsed.frontColor=part.frontColor;}
     if(part.topColor!==undefined&&part.topColor!==null){if(parsed.shape!=='box'||part.rounding===undefined||part.rounding===null||typeof part.topColor!=='string'||!/^#[0-9a-f]{6}$/i.test(part.topColor))throw Error('Top colour needs a box with rounding set and a hex colour.');parsed.topColor=part.topColor;}
     if(part.topRise!==undefined&&part.topRise!==null){if(parsed.shape!=='box'||part.rounding===undefined||part.rounding===null)throw Error('A curved top needs a box with rounding set.');parsed.topRise=number(part.topRise,.01,5);}
     if(part.topStep!==undefined&&part.topStep!==null){if(parsed.shape!=='box'||part.rounding===undefined||part.rounding===null)throw Error('A stepped top needs a box with rounding set.');parsed.topStep=number(part.topStep,.01,5);}
     if(part.topStepAt!==undefined&&part.topStepAt!==null){if(parsed.topStep===undefined)throw Error('A top step position needs a stepped top.');parsed.topStepAt=number(part.topStepAt,-1,1);}
-    for(const field of ['tiltX','tiltY'] as const)if(part[field]!==undefined&&part[field]!==null)parsed[field]=number(part[field],-89,89);
+    for(const field of ['tiltX','tiltY'] as const)if(part[field]!==undefined&&part[field]!==null)parsed[field]=number(part[field],-180,180);
     for(const field of ['topWidth','topDepth'] as const)if(part[field]!==undefined&&part[field]!==null)parsed[field]=number(part[field],.01,200);
     if(part.rounding!==undefined&&part.rounding!==null){if(parsed.shape!=='box')throw Error('Only boxes can have rounded edges.');parsed.rounding=number(part.rounding,0,Math.min(parsed.width,parsed.depth,Math.max(parsed.height,.01))/2);}
     if(part.opacity!==undefined&&part.opacity!==null)parsed.opacity=number(part.opacity,0,1);
@@ -120,6 +131,7 @@ export function parsePolyModel(input:unknown):PolyModel{
     if(parsed.z+parsed.height>200)throw Error('The model must fit within 200 metres in height.');
     return parsed;
   });
+  for(const part of parts)if(part.cutoutTargets?.some(index=>index>=parts.length||parts[index].shape==='cutout'))throw Error('Cutout targets must refer to existing non-cutout shapes.');
   if(model.transform!==undefined&&model.transform!==null&&(!model.transform||typeof model.transform!=='object'||Array.isArray(model.transform)))throw Error('Model orientation must be an object.');
   const rawTransform=model.transform&&typeof model.transform==='object'?model.transform as Record<string,unknown>:{};
   const transform:PolyTransform={pitch:number(rawTransform.pitch??0,-180,180),roll:number(rawTransform.roll??0,-180,180),yaw:number(rawTransform.yaw??0,-360,360),elevation:number(rawTransform.elevation??0,0,200)};
@@ -131,7 +143,7 @@ export const starterModel:PolyModel={format:'mapmason-poly',version:1,name:'Open
   {shape:'roof',x:0,y:0,z:7,width:20,depth:12,height:2.5,rotation:0,color:'#bcd891'},
   {shape:'box',x:0,y:3.9,z:1,width:12,depth:.4,height:5,rotation:0,color:'#273b36'}
 ]};
-export type PolyTriangle={positions:number[];color:number[];opacity:number;emissive?:number;vertexOpacity?:[number,number,number];vertexColors?:[number[],number[],number[]];group?:string;shadow?:boolean;text?:{value:string;aspect:number};uv?:number[]};
+export type PolyTriangle={cutoutIntersection?:boolean;cutout?:boolean;surfaceIndex?:number;partIndex?:number;positions:number[];color:number[];opacity:number;emissive?:number;vertexOpacity?:[number,number,number];vertexColors?:[number[],number[],number[]];group?:string;shadow?:boolean;text?:{value:string;aspect:number};uv?:number[]};
 /** Normalized height of a roof surface; omitted profile preserves existing roofs. */
 function roofHeight(part:PolyPart,u:number,v:number):number{
   const across=Math.max(0,1-Math.abs(u)),along=Math.max(0,1-Math.abs(v));
@@ -189,15 +201,38 @@ function smoothPartTriangles(triangles:PolyTriangle[],materials:Map<PolyTriangle
   }
 }
 
-export function polyTriangles(model:PolyModel,withShadows=false):PolyTriangle[]{
+export function polyTriangles(model:PolyModel,withShadows=false,showCutouts=false):PolyTriangle[]{
   const triangles:PolyTriangle[]=[],segments=12;
-  for(const part of model.parts){
+  const lighting=new Map<PolyTriangle,{base:number[];normal:number[];strength:number}>(),smooth:{triangles:PolyTriangle[];materials:Map<PolyTriangle,string>}[]=[];
+  const modelAngles=[model.transform?.pitch??0,model.transform?.roll??0,model.transform?.yaw??0].map(value=>value*Math.PI/180);
+  const lightNormal=(normal:number[])=>{
+    const [pitch,roll,yaw]=modelAngles,[x,y,z]=normal,py=y*Math.cos(pitch)-z*Math.sin(pitch),pz=y*Math.sin(pitch)+z*Math.cos(pitch),rx=x*Math.cos(roll)+pz*Math.sin(roll),rz=-x*Math.sin(roll)+pz*Math.cos(roll);
+    return [rx*Math.cos(yaw)-py*Math.sin(yaw),rx*Math.sin(yaw)+py*Math.cos(yaw),rz];
+  };
+  for(const [partIndex,part] of model.parts.entries()){
     const partStart=triangles.length,materials=new Map<PolyTriangle,string>();
-    const angle=part.rotation*Math.PI/180,tiltX=(part.tiltX??0)*Math.PI/180,tiltY=(part.tiltY??0)*Math.PI/180,color=part.color.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255),frontColor=part.frontColor?.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255),opacity=part.opacity??1;
-    const transform=(point:number[])=>{let [x,y,z]=point;const y1=y*Math.cos(tiltX)-z*Math.sin(tiltX),z1=y*Math.sin(tiltX)+z*Math.cos(tiltX),x1=x*Math.cos(tiltY)+z1*Math.sin(tiltY),z2=-x*Math.sin(tiltY)+z1;return [part.x+x1*Math.cos(angle)+y1*Math.sin(angle),-part.y+x1*Math.sin(angle)-y1*Math.cos(angle),part.z+z2];};
-    const add=(vertices:number[][],face:number[],shade:number,faceColor=color)=>{
+    const angle=part.rotation*Math.PI/180,tiltX=(part.tiltX??0)*Math.PI/180,tiltY=(part.tiltY??0)*Math.PI/180,color=part.color.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255),frontColor=part.frontColor?.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255),opacity=part.shape==='cutout'?.08:part.opacity??1;
+    const transform=(point:number[])=>{let [x,y,z]=point;const y1=y*Math.cos(tiltX)-z*Math.sin(tiltX),z1=y*Math.sin(tiltX)+z*Math.cos(tiltX),x1=x*Math.cos(tiltY)+z1*Math.sin(tiltY),z2=-x*Math.sin(tiltY)+z1*Math.cos(tiltY);return [part.x+x1*Math.cos(angle)+y1*Math.sin(angle),-part.y+x1*Math.sin(angle)-y1*Math.cos(angle),part.z+z2];};
+    let surfaceCounter=0;
+    const add=(vertices:number[][],face:number[],_shade:number,faceColor=color,surfaceId?:number)=>{
+      const surfaceIndex=surfaceId??surfaceCounter++,override=part.surfaceColors?.[surfaceIndex];
+      if(override)faceColor=override.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255);
       for(let index=1;index<face.length-1;index++){
-        const triangle:PolyTriangle={positions:[...transform(vertices[face[0]]),...transform(vertices[face[index]]),...transform(vertices[face[index+1]])],color:faceColor.map(channel=>channel*(1-(1-shade)*(part.shadingStrength??1))),opacity,emissive:part.emissive??0,group:part.group};
+        const triangle:PolyTriangle={cutout:part.shape==='cutout',partIndex,surfaceIndex,positions:[...transform(vertices[face[0]]),...transform(vertices[face[index]]),...transform(vertices[face[index+1]])],color:[...faceColor],opacity,emissive:part.emissive??0,group:part.group};
+        const points=[face[0],face[index],face[index+1]].map(at=>vertices[at]),u=points[1].map((value,axis)=>value-points[0][axis]),v=points[2].map((value,axis)=>value-points[0][axis]);
+        let normal=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+        if(['box','cutout','sphere','cylinder','cone','pyramid','wedge','text'].includes(part.shape)){
+          const centreZ=part.shape==='box'&&part.rounding!==undefined?0:part.height/2;
+          const outward=[0,1,2].map(axis=>points.reduce((sum,point)=>sum+point[axis],0)/3-(axis===2?centreZ:0));
+          if(normal.reduce((sum,value,axis)=>sum+value*outward[axis],0)<0)normal=normal.map(value=>-value);
+        }else if(part.shape==='roof'){
+          const cy=points.reduce((sum,point)=>sum+point[1],0)/3;
+          if(Math.abs(normal[2])>1e-10?normal[2]<0:normal[1]*cy<0)normal=normal.map(value=>-value);
+        }else if(part.shape==='surface'||part.shape==='line'){
+          if(normal[2]<0)normal=normal.map(value=>-value);
+        }
+        const zero=transform([0,0,0]),worldNormal=transform(normal).map((value,axis)=>value-zero[axis]);
+        lighting.set(triangle,{base:[...faceColor],normal:lightNormal(worldNormal),strength:part.shadingStrength??1});
         triangles.push(triangle);if(part.smoothShading)materials.set(triangle,faceColor.join(','));
       }
     };
@@ -299,8 +334,8 @@ export function polyTriangles(model:PolyModel,withShadows=false):PolyTriangle[]{
           triangles[start+1].text=text;triangles[start+1].uv=[0,0,1,1,0,1];
         }
       }
-    }else if((part.shape==='box'||part.shape==='extrusion')&&part.rounding!==undefined){
-      const halves=[part.width/2,part.depth/2,part.height/2],radius=part.rounding,divisions=part.topColor?48:12,light=[-.35,-.45,.82],lightLength=Math.hypot(...light);
+    }else if(part.shape==='box'&&part.rounding!==undefined){
+      const halves=[part.width/2,part.depth/2,part.height/2],radius=part.rounding,divisions=part.topColor?48:12;
       const coordinates=halves.map(half=>{
         if(!part.smoothShading)return Array.from({length:divisions+1},(_,index)=>-half+2*half*index/divisions);
         const points=[-half,half],core=half-radius;
@@ -312,12 +347,13 @@ export function polyTriangles(model:PolyModel,withShadows=false):PolyTriangle[]{
       });
       const surface=(point:number[],faceAxis:number,faceSign:number)=>{const core=point.map((value,axis)=>Math.max(-halves[axis]+radius,Math.min(halves[axis]-radius,value))),delta=point.map((value,axis)=>value-core[axis]),length=Math.hypot(...delta),position=core.map((value,axis)=>length?value+delta[axis]*radius/length:value),normal=length?delta.map(value=>value/length):[0,0,0];if(!length)normal[faceAxis]=faceSign;if(part.topRise){const blend=radius?Math.max(0,Math.min(1,(point[2]-(halves[2]-radius))/radius)):Number(point[2]>=halves[2]),across=position[0]/halves[0],along=position[1]/halves[1],roofProfile=(1-across*across)*(1-along*along),slopeX=-2*part.topRise*position[0]*(1-along*along)/(halves[0]*halves[0])*blend,slopeY=-2*part.topRise*position[1]*(1-across*across)/(halves[1]*halves[1])*blend,step=part.topStep&&point[1]/halves[1]>= (part.topStepAt??-0.25)?part.topStep:0;position[2]+=(step+part.topRise*roofProfile)*blend;const adjusted=[normal[0]-slopeX*normal[2],normal[1]-slopeY*normal[2],normal[2]],adjustedLength=Math.hypot(...adjusted)||1;for(let axis=0;axis<3;axis++)normal[axis]=adjusted[axis]/adjustedLength;}return {position,normal};};
       for(let axis=0;axis<3;axis++)for(const sign of [-1,1]){
+        const surfaceId=axis===0?(sign<0?5:3):axis===1?(sign<0?2:4):(sign<0?0:1);
         const baseFaceColor=axis===1&&sign===-1&&frontColor?frontColor:color;
         const u=(axis+1)%3,v=(axis+2)%3,us=coordinates[u],vs=coordinates[v],grid=vs.map(vValue=>us.map(uValue=>{const point=[0,0,0];point[axis]=sign*halves[axis];point[u]=uValue;point[v]=vValue;return surface(point,axis,sign).position;}));
         for(let row=0;row<vs.length-1;row++)for(let column=0;column<us.length-1;column++){
           const vertices=[grid[row][column],grid[row][column+1],grid[row+1][column+1],grid[row+1][column]];
           const raw=[0,0,0];raw[axis]=sign*halves[axis];raw[u]=(us[column]+us[column+1])/2;raw[v]=(vs[row]+vs[row+1])/2;
-          const rounded=surface(raw,axis,sign),normal=rounded.normal,lightAmount=Math.max(0,normal.reduce((sum,value,index)=>sum+value*light[index]/lightLength,0)),shade=part.shadingStrength!==undefined ? .62+.38*lightAmount : part.group?.includes('roof panel') ? .92+.08*lightAmount : part.group==='moulded cabin' ? .84+.16*lightAmount : .62+.38*lightAmount;
+          const rounded=surface(raw,axis,sign),shade=1;
           const topColor=part.topColor?.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255);
           if(topColor&&part.topRise){
             type BoundaryPoint={position:number[];score:number};
@@ -332,30 +368,52 @@ export function polyTriangles(model:PolyModel,withShadows=false):PolyTriangle[]{
               return polygon.map(point=>point.position);
             };
             const topPolygon=clip(true),basePolygon=clip(false);
-            if(basePolygon.length>=3)add(basePolygon,basePolygon.map((_,index)=>index),shade,baseFaceColor);
-            if(topPolygon.length>=3)add(topPolygon,topPolygon.map((_,index)=>index),Math.max(shade,.9),topColor);
+            if(basePolygon.length>=3)add(basePolygon,basePolygon.map((_,index)=>index),shade,baseFaceColor,surfaceId);
+            if(topPolygon.length>=3)add(topPolygon,topPolygon.map((_,index)=>index),Math.max(shade,.9),topColor,surfaceId);
           }else{
             const isTopColor=Boolean(topColor&&rounded.position[2]>=halves[2]-radius),faceColor=isTopColor?topColor!:baseFaceColor;
-            add(vertices,[0,1,2,3],isTopColor?Math.max(shade,.9):shade,faceColor);
+            add(vertices,[0,1,2,3],isTopColor?Math.max(shade,.9):shade,faceColor,surfaceId);
           }
         }
       }
     }else{
       const base=[[-part.width/2,front,0],[part.width/2,front,0],[part.width/2,back,0],[-part.width/2,back,0]],top=[[-topW,-topD,height],[topW,-topD,height],[topW,topD,height],[-topW,topD,height]],vertices=[...base,...top];
-      for(const [face,shade]of [[[0,3,2,1],.6],[[4,5,6,7],1],[[0,1,5,4],.72],[[1,2,6,5],.85],[[2,3,7,6],.9],[[3,0,4,7],.78]] as [number[],number][])add(vertices,face,shade);
+      for(const [face,shade]of [[[0,3,2,1],.6],[[4,5,6,7],1],[[0,1,5,4],.72],[[1,2,6,5],.85],[[2,3,7,6],.9],[[3,0,4,7],.78]] as [number[],number][])add(vertices,face,shade,face[0]===0&&face[1]===1?frontColor:undefined);
     }
-    if(part.smoothShading)smoothPartTriangles(triangles.slice(partStart),materials);
+    const partTriangles=triangles.slice(partStart);
+    if(part.shape==='arch'||part.shape==='tube'||part.shape==='extrusion'){
+      const volume=partTriangles.reduce((sum,triangle)=>{const p=triangle.positions;return sum+p[0]*(p[4]*p[8]-p[5]*p[7])+p[1]*(p[5]*p[6]-p[3]*p[8])+p[2]*(p[3]*p[7]-p[4]*p[6]);},0);
+      // The model's coordinate conversion reflects y, reversing mesh winding.
+      if(volume>0)for(const triangle of partTriangles){const entry=lighting.get(triangle)!;entry.normal=entry.normal.map(value=>-value);}
+    }
+    if(part.smoothShading)smooth.push({triangles:partTriangles,materials});
   }
   const transform=model.transform??{pitch:0,roll:0,yaw:0,elevation:0};
   if(transform.pitch||transform.roll||transform.yaw||transform.elevation){
-    const points=triangles.flatMap(triangle=>[0,3,6].map(at=>triangle.positions.slice(at,at+3))),bounds=pointBounds(points),pivot=[0,1,2].map(axis=>axis===2?bounds.min[axis]:(bounds.min[axis]+bounds.max[axis])/2);
+    const solidTriangles=triangles.filter(triangle=>!triangle.cutout),points=(solidTriangles.length?solidTriangles:triangles).flatMap(triangle=>[0,3,6].map(at=>triangle.positions.slice(at,at+3))),bounds=pointBounds(points),pivot=[0,1,2].map(axis=>axis===2?bounds.min[axis]:(bounds.min[axis]+bounds.max[axis])/2);
     const angles=[transform.pitch,transform.roll,transform.yaw].map(value=>value*Math.PI/180),[cp,cr,cy]=angles,[sp,sr,sy]=angles.map(Math.sin),[cosP,cosR,cosY]=[cp,cr,cy].map(Math.cos);
     const rotate=(point:number[])=>{let [x,y,z]=point.map((value,axis)=>value-pivot[axis]);const py=y*cosP-z*sp,pz=y*sp+z*cosP,rx=x*cosR+pz*sr,rz=-x*sr+pz*cosR,ry=py,fx=rx*cosY-ry*sy,fy=rx*sy+ry*cosY;return [fx+pivot[0],fy+pivot[1],rz+pivot[2]];};
     const rotated=points.map(rotate),floor=pointBounds(rotated).min[2];
     for(const triangle of triangles)triangle.positions=triangle.positions.flatMap((_,index,array)=>index%3===0?rotate(array.slice(index,index+3)).map((value,axis)=>axis===2?value-floor+transform.elevation:value):[]);
   }
-  if(withShadows&&triangles.length){
-    const points=triangles.flatMap(triangle=>[0,3,6].map(at=>triangle.positions.slice(at,at+3))),bounds=pointBounds(points),floor=bounds.min[2],opacity=.17*Math.exp(-Math.max(0,floor)/18),center=[(bounds.min[0]+bounds.max[0])/2,(bounds.min[1]+bounds.max[1])/2],radiusX=Math.max(.2,(bounds.max[0]-bounds.min[0])*.54)*1.35,radiusY=Math.max(.2,(bounds.max[1]-bounds.min[1])*.54)*1.35,rings=8,sides=32,z=.003,color=[.055,.075,.06];
+  // One shared directional light for all geometry; never derive lighting from part names.
+  const light=[-.35,.45,.82],lightLength=Math.hypot(...light);
+  for(const [triangle,entry] of lighting){
+    const length=Math.hypot(...entry.normal),diffuse=length?Math.max(0,entry.normal.reduce((sum,value,axis)=>sum+value*light[axis],0)/(length*lightLength)):1;
+    const brightness=1-(1-(.62+.38*diffuse))*entry.strength;
+    triangle.color=entry.base.map(value=>value*brightness);
+  }
+  for(const part of smooth)smoothPartTriangles(part.triangles,part.materials);
+  // Omit horizontal ground-contact faces so openings reveal the actual ground.
+  for(let index=triangles.length-1;index>=0;index--){
+    const triangle=triangles[index];
+    if(!triangle.cutout&&[2,5,8].every(at=>Math.abs(triangle.positions[at])<.001))triangles.splice(index,1);
+  }
+  if(model.parts.some(part=>part.shape==='cutout')){
+    const clipped=applyPolyCutouts(triangles,model.parts,showCutouts);triangles.length=0;for(const triangle of clipped)triangles.push(triangle);
+  }
+  if(withShadows&&triangles.some(triangle=>!triangle.cutout)){
+    const points=triangles.filter(triangle=>!triangle.cutout).flatMap(triangle=>[0,3,6].map(at=>triangle.positions.slice(at,at+3))),bounds=pointBounds(points),floor=bounds.min[2],opacity=.17*Math.exp(-Math.max(0,floor)/18),center=[(bounds.min[0]+bounds.max[0])/2,(bounds.min[1]+bounds.max[1])/2],radiusX=Math.max(.2,(bounds.max[0]-bounds.min[0])*.54)*1.35,radiusY=Math.max(.2,(bounds.max[1]-bounds.min[1])*.54)*1.35,rings=8,sides=32,z=.003,color=[.055,.075,.06];
     const shadowPoint=(radius:number,side:number)=>[center[0]+Math.cos(side*Math.PI*2/sides)*radiusX*radius,center[1]+Math.sin(side*Math.PI*2/sides)*radiusY*radius,z],shadowTriangle=(a:number[],b:number[],c:number[],alpha:[number,number,number])=>triangles.push({positions:[...a,...b,...c],color,opacity,vertexOpacity:alpha,shadow:true});
     for(let ring=0;ring<rings;ring++){
       const inner=ring/rings,outer=(ring+1)/rings,innerAlpha=opacity*(1-inner)*(1-inner),outerAlpha=opacity*(1-outer)*(1-outer);
@@ -373,14 +431,30 @@ export function polyTriangles(model:PolyModel,withShadows=false):PolyTriangle[]{
 }
 export function polyGlowTriangles(triangles:PolyTriangle[]):PolyTriangle[]{
   const groups=new Map<string,PolyTriangle[]>();
-  triangles.forEach((triangle,index)=>{if((triangle.emissive??0)<=0||triangle.shadow)return;const key=triangle.group??`part:${index}`;groups.set(key,[...(groups.get(key)??[]),triangle]);});
-  const glow:PolyTriangle[]=[];
+  triangles.forEach((triangle,index)=>{
+    if((triangle.emissive??0)<=0||triangle.opacity<=0||triangle.shadow)return;
+    const key=triangle.group??`part:${triangle.partIndex??index}`,group=groups.get(key);
+    if(group)group.push(triangle);else groups.set(key,[triangle]);
+  });
+  const glow:PolyTriangle[]=[],layers=16;
+  const weights=Array.from({length:layers},(_,layer)=>Math.exp(-4*(layer/layers)**2)*(1-(layer+1)/(layers+1))**2),weightSum=weights.reduce((sum,value)=>sum+value,0);
   for(const group of groups.values()){
-    const points=group.flatMap(triangle=>[0,3,6].map(at=>triangle.positions.slice(at,at+3))),center=[0,1,2].map(axis=>points.reduce((sum,point)=>sum+point[axis],0)/points.length),intensity=Math.max(...group.map(triangle=>triangle.emissive??0));
-    for(const triangle of group){const positions:number[]=[];for(const at of [0,3,6])for(let axis=0;axis<3;axis++)positions.push(center[axis]+(triangle.positions[at+axis]-center[axis])*1.18);glow.push({...triangle,positions,opacity:Math.min(.22,.18*intensity),emissive:0,vertexOpacity:undefined,shadow:false,text:undefined,uv:undefined});}
+    const center=[0,0,0];let count=0,intensity=0;
+    for(const triangle of group){intensity=Math.max(intensity,triangle.emissive??0);for(const at of [0,3,6]){for(let axis=0;axis<3;axis++)center[axis]+=triangle.positions[at+axis];count++;}}
+    for(let axis=0;axis<3;axis++)center[axis]/=count;
+    // Many faint shells approximate a diffuse halo: the outer shells fade to zero.
+    // Keep total energy bounded as layers are added, rather than whitening the object.
+    for(let layer=layers-1;layer>=0;layer--){
+      const spread=(.14+.3*intensity)*(layer+1)/layers,weight=.14*intensity*weights[layer]/weightSum;
+      for(const triangle of group){
+        const positions=triangle.positions.map((value,index)=>center[index%3]+(value-center[index%3])*(1+spread));
+        glow.push({...triangle,positions,opacity:weight*triangle.opacity,emissive:0,vertexOpacity:undefined,vertexColors:undefined,shadow:false,text:undefined,uv:undefined});
+      }
+    }
   }
   return glow;
 }
+
 export function polyModelDimensions(model:PolyModel){
   const positions=polyTriangles(model).flatMap(triangle=>[triangle.positions.slice(0,3),triangle.positions.slice(3,6),triangle.positions.slice(6,9)]);
   const bounds=pointBounds(positions),extent=(axis:number)=>Math.max(.5,bounds.max[axis]-bounds.min[axis]);
@@ -389,6 +463,7 @@ export function polyModelDimensions(model:PolyModel){
 export function polyFeatures(model:PolyModel):GeoJSON.FeatureCollection<GeoJSON.Polygon>{
   const features:GeoJSON.Feature<GeoJSON.Polygon>[]=[];
   model.parts.forEach((part,index)=>{
+    if(part.shape==='cutout')return;
     const angle=part.rotation*Math.PI/180;
     const point=(east:number,north:number):Coord=>offset([0,0],part.x+east*Math.cos(angle)+north*Math.sin(angle),part.y-east*Math.sin(angle)+north*Math.cos(angle));
     const add=(ring:Coord[],height:number)=>features.push({type:'Feature',properties:{part:index,color:part.color,base:part.z,height:part.z+height,opacity:part.opacity??1,group:part.group},geometry:{type:'Polygon',coordinates:[[...ring,ring[0]]]}});

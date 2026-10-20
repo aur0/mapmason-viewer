@@ -9,16 +9,16 @@ import {waterTexture} from './waterTexture';
 import * as maplibregl from 'maplibre-gl';
 import './mapLibreWorker';
 import type { GeoJSONSource, Map as LibreMap } from 'maplibre-gl';
-import { groundControlRing,groundFromPoints,groundRing,isBoundaryTool,areaKinds,isAreaKind, connectedPathIds, bridgePaths, pathOutlineFeatures, moveConnectedPathVertex, gridFeatures, kinds, objectFeatures, objectRing, pathFeatures, type Coord, type EventProject } from './model';
+import { groundControlRing,groundFromPoints,groundRing,isBoundaryTool,areaKinds,isAreaKind, connectedPathIds, bridgePaths,bridgeEndpoints,bridgeJunctions,bridgeHandlePoints, pathOutlineFeatures, moveConnectedPathVertex, gridFeatures, kinds, objectFeatures, objectRing, pathFeatures,pathProfile,pathSections, type Coord, type EventProject,type SitePath } from './model';
 import type { FeatureCollection, Point } from 'geojson';
-import { drawingPreview,segmentLengthLabel } from './drawing';
+import { DRAFT_PATH_ID,drawingPreview,segmentLengthLabel } from './drawing';
 import {pathAccess,pathTypes,pathVertexKey,type PathType} from './model';
 import {PathDeckLayer} from './PathDeckLayer';
 import {MapObjectModelsLayer} from './MapObjectModelsLayer';
 
 export type ViewerPosition = Pick<GeolocationPosition,'coords'|'timestamp'>;
 export type MapActions = { roadRoute: () => import('./model').SitePath[]; relock: () => void; heading: (heading: number | null) => void; orient: (bearing: number, pitch: number) => void; fit: () => void; fitReference: (id:string) => void; zoom: (by: number) => void; north: () => void; locate: (at: Coord, options?: { preserveZoom?: boolean; from?: Coord; pointTowards?: boolean }) => void };
-type Props = {onMapReady?:(map:LibreMap|null)=>void;pathType?:PathType;draftTypes?:PathType[]; onManualInteraction?: () => void; route?: WalkingRoute | null; onPosition?: (position: ViewerPosition) => void; gps?: boolean; onLocationError?: (message: string) => void; project: EventProject; selected: string | null; tool: string; mode: '2d' | '3d'; reference: boolean; ground:boolean; boundary:boolean; groundVertex:number|null; onGroundSelect:(index:number)=>void; onGroundMove:(index:number,at:Coord)=>void; onGroundInsert:(index:number,at:Coord)=>void; onGroundRemove:(index:number)=>void; grid: boolean; labels: boolean; draft: Coord[]; target: Coord | null; pathVertex: number | null; pathVertices?: {pathId:string;index:number}[]; actions: React.RefObject<MapActions | null>; onConnect: (at:Coord,closeLoop:boolean) => void; onClick: (at: Coord, id?: string) => void; onMove: (id: string, at: Coord) => void; onPathMove: (id: string, index: number, at: Coord) => void; onPathInsert: (id: string, index: number, at: Coord) => void; onPathRemove: (id: string, index: number) => void; onPathBranch: (id:string,index: number) => void; onPathSelect: (id:string,index: number,shiftKey:boolean) => void; onCursor: (at: Coord) => void; onError: (s: string) => void };
+type Props = {onMapReady?:(map:LibreMap|null)=>void;pathType?:PathType;draftTypes?:PathType[]; onManualInteraction?: () => void; route?: WalkingRoute | null; onPosition?: (position: ViewerPosition) => void; gps?: boolean; onLocationError?: (message: string) => void; project: EventProject; selected: string | null; boxSelectedIds?:string[];boxSelectionActive?:boolean; tool: string; mode: '2d' | '3d'; reference: boolean; ground:boolean; boundary:boolean; groundVertex:number|null; onGroundSelect:(index:number)=>void; onGroundMove:(index:number,at:Coord)=>void; onGroundInsert:(index:number,at:Coord)=>void; onGroundRemove:(index:number)=>void; grid: boolean; labels: boolean; draftHeights?:number[]; draft: Coord[]; target: Coord | null; pathVertex: number | null; pathVertices?: {pathId:string;index:number}[]; actions: React.RefObject<MapActions | null>; onConnect: (at:Coord,closeLoop:boolean,height?:number) => void; onBridgeBranchAt:(id:string,at:Coord)=>void; onClick: (at: Coord, id?: string) => void; onMove: (id: string, at: Coord) => void; onPathMove: (id: string, index: number, at: Coord, connectTo?:{pathId:string;segment:number;at:Coord}) => void; onPathInsert: (id: string, index: number, at: Coord) => void; onPathRemove: (id: string, index: number) => void; onPathBranchAt:(id:string,at:Coord,segment:number,pointIndex?:number,branchTool?:'path'|'underpass'|'bridge')=>void; onPathSelect: (id:string,index:number,additive:boolean) => void; onPathSegmentSelect:(id:string,segment:number,extend:boolean)=>void; onBoxSelect:(ids:string[],points:{pathId:string;index:number}[])=>void; onCursor: (at: Coord) => void; onError: (s: string) => void };
 const empty: FeatureCollection = { type: 'FeatureCollection', features: [] };
 const labelZoom={fullText:{highPriority:13,mediumPriority:14,other:15},showLowPriority:12.5};
 export default function MapCanvas(props: Props) {
@@ -30,33 +30,166 @@ export default function MapCanvas(props: Props) {
     const decks=new PathDeckLayer();
     const objectModels=new MapObjectModelsLayer(()=>positionEnds());
     const lengthLabel=document.createElement('div');lengthLabel.className='drawing-length';lengthLabel.hidden=true;lengthLabel.title='Next segment length';
-    let endpointHandles: { marker: maplibregl.Marker; id:string; index: number }[] = [];
+
     let midpointHandles: { marker: maplibregl.Marker; id:string; index: number }[] = [];
     let objectLabelMarkers:{marker:maplibregl.Marker;id:string}[]=[];
     let groundPoints:Coord[]=[];
     let groundMidpoints:{marker:maplibregl.Marker;index:number}[]=[];
     let editingPaths=new Map<string,Coord[]>();
     let vertexHandles:{marker:maplibregl.Marker;id:string;index:number}[]=[];
+    let activeVertexDrag:{id:string;index:number;at?:Coord}|null=null;
+    let pathDragCleanups:(()=>void)[]=[];
     let pointer:{x:number;y:number}|null=null,shiftHeld=false,hasDraft=false;
     let startObjectDrag:(event:PointerEvent,fromLabel?:boolean)=>void=()=>{};
-    let snapTargets:{at:Coord;node:HTMLButtonElement;closeLoop:boolean}[]=[];
+    let snapTargets:{at:Coord;node:HTMLButtonElement;marker:maplibregl.Marker;closeLoop:boolean;height:number}[]=[];
+    let bridgePreviewMarker:maplibregl.Marker|null=null,bridgePreviewNode:HTMLDivElement|null=null,bridgeHoverTarget:{id:string;at:Coord;height:number;segment:number;pointIndex?:number;tool:'bridge'|'path'|'underpass'}|null=null;
+    let bridgeGuideSvg:SVGSVGElement|null=null;
+    let highlightedDrawingPoint:{pathId:string;index:number}|null=null;
+    const updateDrawingSnapHighlight=(target:{pathId:string;index:number}|null)=>{
+      highlightedDrawingPoint=target;
+      bridgeGuideSvg?.querySelectorAll<HTMLButtonElement>('[data-drawing-snap]').forEach(node=>node.classList.toggle('snap-highlight',node.dataset.pathId===target?.pathId&&node.dataset.pointIndex===String(target?.index)));
+    };
+    const renderBridgeGuideSvg=()=>{
+      if(!bridgeGuideSvg)return;
+      bridgeGuideSvg.replaceChildren();
+      const dragging=activeVertexDrag!==null;
+      if(!dragging&&(!['bridge','path','underpass'].includes(latest.current.tool)||latest.current.mode!=='3d'))return;
+      const width=map.getContainer().clientWidth,height=map.getContainer().clientHeight;bridgeGuideSvg.setAttribute('viewBox',`0 0 ${width} ${height}`);bridgeGuideSvg.setAttribute('width',String(width));bridgeGuideSvg.setAttribute('height',String(height));
+      const candidates=dragging?drawingGuidePaths(vertexDragTool(activeVertexDrag!.id,activeVertexDrag!.index)).filter(candidate=>candidate.path.id!==activeVertexDrag!.id):drawingGuidePaths(latest.current.tool);
+      for(const candidate of candidates){
+        const profile=pathProfile(candidate.path),projectPoint=(at:Coord,height:number)=>latest.current.mode==='3d'?decks.project(at,height)??map.project(at):map.project(at),projected=profile.map(sample=>projectPoint(sample.position,sample.height));
+        if(projected.length<2)continue;
+        if(latest.current.mode==='3d')for(const run of drawingGuideRuns(candidate)){const line=document.createElementNS('http://www.w3.org/2000/svg','polyline');line.setAttribute('points',run.samples.map(sample=>projectPoint(sample.position,sample.height)).map(point=>`${point.x},${point.y}`).join(' '));line.setAttribute('fill','none');line.setAttribute('stroke',run.blocked?'#e26358':candidate.kind==='bridge'?'#f6d879':candidate.kind==='underpass'?'#8fc9f1':'#50d7a0');line.setAttribute('stroke-width','3.5');line.setAttribute('stroke-dasharray','5 5');line.setAttribute('stroke-linecap','round');line.setAttribute('stroke-linejoin','round');line.setAttribute('vector-effect','non-scaling-stroke');line.style.filter='drop-shadow(0 1px 2px #18301caa)';bridgeGuideSvg.append(line);}
+        if(dragging){
+          for(const index of drawingGuidePointIndices(candidate)){
+            const point=candidate.path.points[index],height=candidate.path.heights?.[index]??0,screen=projectPoint(point,height),dot=document.createElementNS('http://www.w3.org/2000/svg','foreignObject');dot.setAttribute('x',String(screen.x-8));dot.setAttribute('y',String(screen.y-8));dot.setAttribute('width','16');dot.setAttribute('height','16');const target=document.createElement('button');target.type='button';target.className='path-connect-target';target.dataset.drawingSnap='true';target.dataset.pathId=candidate.path.id;target.dataset.pointIndex=String(index);if(highlightedDrawingPoint?.pathId===candidate.path.id&&highlightedDrawingPoint.index===index)target.classList.add('snap-highlight');target.setAttribute('aria-hidden','true');target.tabIndex=-1;target.style.pointerEvents='none';dot.append(target);bridgeGuideSvg.append(dot);
+          }
+        }
+      }
+    };
+    const drawingGuidePaths=(tool:string)=>{
+      const paths:{path:SitePath;offset:number;kind:'path'|'underpass'|'bridge'}[]=[];
+      if(tool==='path'){
+        for(const path of latest.current.project.paths){
+          if(!path.segmentTypes?.includes('underpass'))paths.push({path,offset:0,kind:'path'});
+          else for(const section of pathSections(path))if(section.type!=='underpass')paths.push({path:section.path,offset:section.start,kind:'path'});
+        }
+      }else if(tool==='underpass'){
+        for(const path of latest.current.project.paths)paths.push({path,offset:0,kind:'path'});
+      }else if(tool==='bridge'){
+        for(const path of latest.current.project.paths){
+          for(const section of pathSections(path))if(section.type!=='underpass')paths.push({path:section.path,offset:section.start,kind:section.type==='bridge'?'bridge':'path'});
+        }
+        for(const path of bridgePaths(latest.current.project.bridges))paths.push({path,offset:0,kind:'bridge'});
+      }
+      if(['path','bridge','underpass'].includes(tool)&&latest.current.tool===tool&&!activeVertexDrag&&latest.current.draft.length>=2){const kind=tool as 'path'|'bridge'|'underpass';paths.push({path:{id:DRAFT_PATH_ID,name:'Unfinished route',width:4,points:latest.current.draft,heights:latest.current.draftHeights,segmentTypes:kind==='path'?latest.current.draftTypes:latest.current.draft.slice(1).map(()=>kind)},offset:0,kind});}
+      return paths;
+    };
+    const drawingGuidePointIndices=(candidate:ReturnType<typeof drawingGuidePaths>[number])=>{
+      const bridge=latest.current.project.bridges?.find(bridge=>bridge.id===candidate.path.id),key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`,seen=new Set<string>();
+      const allowed=candidate.kind==='bridge'?new Set(bridgeHandlePoints(bridge?.sourcePoints??bridge?.points??candidate.path.points).map(key)):null;
+      const ends=new Set(bridgeEndpoints(bridge?.sourcePoints??bridge?.points??candidate.path.points).map(key)),deckHeight=Math.max(0,...candidate.path.heights??[]);
+      const blockedPoints=new Set(allowed?drawingGuideSegments(candidate).filter(segment=>segment.blocked).flatMap(segment=>[key(segment.first.position),key(segment.last.position)]):[]);
+      return candidate.path.points.flatMap((point,index)=>{const value=key(point);if(seen.has(value)||allowed&&!allowed.has(value))return [];if(allowed&&!ends.has(value)&&((candidate.path.heights?.[index]??0)<deckHeight-.001||blockedPoints.has(value)))return [];seen.add(value);return [index];});
+    };
+    const nearestDrawingPoint=(point:{x:number;y:number},tool:'path'|'underpass'|'bridge',excludeId?:string)=>{
+      let best:{distance:number;at:Coord;height:number;pathId:string;index:number}|undefined;
+      for(const candidate of drawingGuidePaths(tool)){
+        if(candidate.path.id===excludeId)continue;
+        for(const index of drawingGuidePointIndices(candidate)){
+          const at=candidate.path.points[index],height=candidate.path.heights?.[index]??0,ground=map.project(at),projected=latest.current.mode==='3d'?decks.project(at,height)??ground:ground,distance=Math.hypot(point.x-projected.x,point.y-projected.y);
+          if(!best||distance<best.distance)best={distance,at,height,pathId:candidate.path.id,index};
+        }
+      }
+      return best;
+    };
+    const vertexDragTool=(id:string,index:number):'path'|'underpass'|'bridge'=>{
+      if(latest.current.project.bridges?.some(bridge=>bridge.id===id))return 'bridge';
+      const path=latest.current.project.paths.find(path=>path.id===id),type=path?.segmentTypes?.[Math.min(index,path.points.length-2)];
+      return type==='underpass'?'underpass':type==='bridge'?'bridge':'path';
+    };
+    const drawingGuideSegments=(candidate:ReturnType<typeof drawingGuidePaths>[number])=>{
+      const samples=pathProfile(candidate.path),deckHeight=Math.max(0,...samples.map(sample=>sample.height));
+      const segments=samples.slice(1).map((last,index)=>{const first=samples[index];return {first,last,blocked:candidate.kind==='bridge'&&candidate.path.id!==DRAFT_PATH_ID&&Math.min(first.height,last.height)<deckHeight-.001};});
+      if(candidate.kind!=='bridge')return segments;
+      const distances=[0];for(const segment of segments){const a=segment.first.position,b=segment.last.position,length=Math.hypot((b[0]-a[0])*111319.49079327358*Math.cos((a[1]+b[1])*Math.PI/360),(b[1]-a[1])*111319.49079327358);distances.push(distances.at(-1)!+length);}
+      const incomingWidth=activeVertexDrag?(latest.current.project.bridges?.find(bridge=>bridge.id===activeVertexDrag!.id)?.width??latest.current.project.paths.find(path=>path.id===activeVertexDrag!.id)?.width??4):4;
+      const clearance=Math.max(2,(candidate.path.width+incomingWidth)/2),blocked=segments.flatMap((segment,index)=>segment.blocked?[{start:Math.max(0,distances[index]-clearance),end:distances[index+1]+clearance}]:[]);
+      return segments.flatMap((segment,index)=>{
+        const start=distances[index],end=distances[index+1],length=end-start;if(length<1e-8)return [segment];
+        const cuts=[start,end,...blocked.flatMap(zone=>[zone.start,zone.end]).filter(distance=>distance>start+1e-8&&distance<end-1e-8)].sort((a,b)=>a-b);
+        const sampleAt=(distance:number)=>{const t=(distance-start)/length;return {segment:segment.first.segment,position:[segment.first.position[0]+(segment.last.position[0]-segment.first.position[0])*t,segment.first.position[1]+(segment.last.position[1]-segment.first.position[1])*t] as Coord,height:segment.first.height+(segment.last.height-segment.first.height)*t};};
+        return cuts.slice(1).flatMap((distance,cut)=>distance-cuts[cut]<1e-8?[]:[{first:sampleAt(cuts[cut]),last:sampleAt(distance),blocked:blocked.some(zone=>(cuts[cut]+distance)/2>=zone.start&&(cuts[cut]+distance)/2<=zone.end)}]);
+      });
+    };
+    const drawingGuideRuns=(candidate:ReturnType<typeof drawingGuidePaths>[number])=>{
+      const runs:{blocked:boolean;samples:ReturnType<typeof pathProfile>}[]=[];
+      for(const segment of drawingGuideSegments(candidate)){const previous=runs.at(-1);if(previous&&previous.blocked===segment.blocked)previous.samples.push(segment.last);else runs.push({blocked:segment.blocked,samples:[segment.first,segment.last]});}
+      return runs;
+    };
+    const drawingGuideData=(paths:ReturnType<typeof drawingGuidePaths>)=>({type:'FeatureCollection' as const,features:paths.flatMap(candidate=>drawingGuideRuns(candidate).map(run=>({type:'Feature' as const,properties:{id:candidate.path.id,guideType:run.blocked?'ramp':candidate.kind},geometry:{type:'LineString' as const,coordinates:run.samples.map(sample=>sample.position)}})))});
+    const bridgeRampEndpoints=()=> (latest.current.project.bridges??[]).flatMap(bridge=>{
+      const source=bridge.sourcePoints??bridge.points,key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
+      return bridgeEndpoints(source).flatMap(at=>{const setting=bridge.endpoints?.find(endpoint=>key(endpoint.point)===key(at)),mode=setting?.mode??'ramp';return mode==='ramp'||mode==='steps'?[{id:bridge.id,at}]:[];});
+    });
+    const nearestBridgeRampEndpoint=(point:{x:number;y:number})=>{
+      let best:{id:string;at:Coord;distance:number}|undefined;
+      for(const endpoint of bridgeRampEndpoints()){const projected=map.project(endpoint.at),distance=Math.hypot(point.x-projected.x,point.y-projected.y);if(!best||distance<best.distance)best={...endpoint,distance};}
+      return best;
+    };
+    const nearestDrawingLine=(point:{x:number;y:number},tool:'path'|'underpass'|'bridge',excludeId?:string)=>{
+      let best:{distance:number;id:string;at:Coord;height:number;segment:number;pointIndex?:number;kind:'path'|'underpass'|'bridge';blocked:boolean}|undefined;
+      for(const candidate of drawingGuidePaths(tool)){
+        if(candidate.path.id===excludeId)continue;
+        const isBridge=candidate.kind==='bridge';
+        const screenAt=(at:Coord,height:number)=>{const ground=map.project(at);return latest.current.mode==='3d'?decks.project(at,height)??ground:ground;};
+        for(const {first,last,blocked} of drawingGuideSegments(candidate)){
+          const a=screenAt(first.position,first.height),b=screenAt(last.position,last.height),dx=b.x-a.x,dy=b.y-a.y,length=dx*dx+dy*dy;
+          const t=length?Math.max(0,Math.min(1,((point.x-a.x)*dx+(point.y-a.y)*dy)/length)):0,distance=Math.hypot(point.x-(a.x+t*dx),point.y-(a.y+t*dy));
+          if(best&&distance>=best.distance)continue;
+          const at:Coord=[first.position[0]+(last.position[0]-first.position[0])*t,first.position[1]+(last.position[1]-first.position[1])*t];
+          const segment=candidate.offset+Math.max(0,Math.min(candidate.path.points.length-2,first.segment));
+          let pointIndex:number|undefined;
+          if(!isBridge)candidate.path.points.forEach((control,index)=>{const projected=screenAt(control,candidate.path.heights?.[index]??0);if(Math.hypot(point.x-projected.x,point.y-projected.y)<8)pointIndex=candidate.offset+index;});
+          best={distance,id:candidate.path.id,at:pointIndex===undefined?at:(candidate.path.points[pointIndex-candidate.offset]??at),height:first.height+(last.height-first.height)*t,segment,pointIndex,kind:candidate.kind,blocked};
+        }
+      }
+      return best?.blocked?undefined:best;
+    };
+    const setBridgePreview=(data:GeoJSON.GeoJSON)=>{const source=map.getSource('bridge-connect-preview') as GeoJSONSource|undefined;if(source&&map.isStyleLoaded())source.setData(data);};
+    const updateVertexSnapPreview=(point:{x:number;y:number},excludeId:string)=>{
+      if(!activeVertexDrag||activeVertexDrag.id!==excludeId)return;
+      const tool=vertexDragTool(excludeId,activeVertexDrag.index),existingPoint=nearestDrawingPoint(point,tool,excludeId),overSnapPoint=Boolean(existingPoint&&existingPoint.distance<=14),target=overSnapPoint?undefined:nearestDrawingLine(point,tool,excludeId),inRange=Boolean(target&&target.distance<=14);
+      updateDrawingSnapHighlight(overSnapPoint&&existingPoint?{pathId:existingPoint.pathId,index:existingPoint.index}:null);
+      if(latest.current.mode==='2d'){
+        map.setLayoutProperty('bridge-connect-preview','visibility',inRange?'visible':'none');
+        setBridgePreview(inRange?{type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{type:'Point',coordinates:target!.at}}]}:{type:'FeatureCollection',features:[]});
+        return;
+      }
+      setBridgePreview({type:'FeatureCollection',features:[]});
+      if(!inRange){if(bridgePreviewNode)bridgePreviewNode.style.display='none';return;}
+      const ground=map.project(target!.at),raised=decks.project(target!.at,target!.height);
+      if(!bridgePreviewMarker){bridgePreviewNode=document.createElement('div');bridgePreviewNode.className='path-vertex';bridgePreviewNode.setAttribute('aria-hidden','true');bridgePreviewNode.style.pointerEvents='none';bridgePreviewMarker=new maplibregl.Marker({element:bridgePreviewNode,anchor:'center'}).setLngLat(target!.at).addTo(map);}
+      bridgePreviewMarker.setLngLat(target!.at).setOffset(raised?[raised.x-ground.x,raised.y-ground.y]:[0,0]);bridgePreviewNode!.style.display='block';bridgePreviewMarker.getElement().style.zIndex='20';
+    };
     const nearestTarget=(point:{x:number;y:number})=>{
       let distance=14,result:typeof snapTargets[number]|undefined;
-      for(const target of snapTargets){const at=map.project(target.at),d=Math.hypot(at.x-point.x,at.y-point.y);if(d<distance){distance=d;result=target;}}
+      for(const target of snapTargets){const ground=map.project(target.at),raised=latest.current.mode==='3d'&&target.height>0?decks.project(target.at,target.height):undefined,at=raised??ground,d=Math.hypot(at.x-point.x,at.y-point.y);if(d<distance){distance=d;result=target;}}
       return result;
     };
     const resolveDrawingPoint=(at:Coord,point:{x:number;y:number},shift:boolean):Coord=>{
       const target=nearestTarget(point);if(target)return target.at;
+      if(['path','bridge','underpass'].includes(latest.current.tool)){const line=nearestDrawingLine(point,latest.current.tool as 'path'|'bridge'|'underpass');if(line&&line.distance<=14)return line.at;}
       if(!shift)return at;
       const p=latest.current,path=p.project.paths.find(path=>path.id===p.selected);
-      const origin=p.tool==='path'||isBoundaryTool(p.tool)?p.draft.at(-1):p.tool==='extend-start'?path?.points[0]:p.tool==='extend-end'?path?.points.at(-1):undefined;
+      const origin=p.tool==='path'||p.tool==='bridge'||p.tool==='underpass'||isBoundaryTool(p.tool)?p.draft.at(-1):p.tool==='extend-start'?path?.points[0]:p.tool==='extend-end'?path?.points.at(-1):undefined;
       if(!origin)return at;
       const horizontal:Coord=[at[0],origin[1]],vertical:Coord=[origin[0],at[1]],a=map.project(horizontal),b=map.project(vertical);
       return Math.hypot(a.x-point.x,a.y-point.y)<=Math.hypot(b.x-point.x,b.y-point.y)?horizontal:vertical;
     };
     const renderDraft=()=>{
       if(!ready)return;const p=latest.current;
-      const drawing=p.tool==='path'||isBoundaryTool(p.tool)||p.tool.startsWith('extend-');
+      const drawing=p.tool==='path'||p.tool==='bridge'||p.tool==='underpass'||isBoundaryTool(p.tool)||p.tool.startsWith('extend-');
       if(!drawing&&!hasDraft)return;
       hasDraft=drawing;
       const at=pointer?map.unproject([pointer.x,pointer.y]):null,cursor=at&&pointer?resolveDrawingPoint([at.lng,at.lat],pointer,shiftHeld):null;
@@ -76,9 +209,11 @@ export default function MapCanvas(props: Props) {
       objectLabelMarkers.forEach(({marker,id})=>{const object=latest.current.project.objects.find(item=>item.id===id);if(!object)return;const ground=map.project(object.position),raised=latest.current.mode==='3d'?objectModels.project(object.position,object.height):undefined;marker.setLngLat(object.position).setOffset(raised?[raised.x-ground.x,raised.y-ground.y-8]:[0,-8]);});
       groundMidpoints.forEach(({marker,index})=>{const a=map.project(groundPoints[index]),b=map.project(groundPoints[(index+1)%groundPoints.length]);marker.setLngLat(map.unproject([(a.x+b.x)/2,(a.y+b.y)/2]));});
       vertexHandles.forEach(({marker,id,index})=>{
-        const at=editingPaths.get(id)![index],height=latest.current.project.paths.find(path=>path.id===id)?.heights?.[index]??0,ground=map.project(at),raised=latest.current.mode==='3d'?decks.project(at,height):undefined;
+        if(activeVertexDrag?.id===id&&activeVertexDrag.index===index)return;
+        const at=editingPaths.get(id)?.[index];if(!at)return;const height=latest.current.project.paths.find(path=>path.id===id)?.heights?.[index]??bridgePaths(latest.current.project.bridges).find(path=>path.id===id)?.heights?.[index]??0,ground=map.project(at),raised=latest.current.mode==='3d'?decks.project(at,height):undefined;
         marker.setLngLat(at).setOffset(raised?[raised.x-ground.x,raised.y-ground.y]:[0,0]);
       });
+      snapTargets.forEach(({at,marker,height})=>{const ground=map.project(at),raised=latest.current.mode==='3d'&&height>0?decks.project(at,height):undefined;marker.setLngLat(at).setOffset(raised?[raised.x-ground.x,raised.y-ground.y]:[0,0]);});
       midpointHandles.forEach(({ marker, id,index }) => {
         const editingPoints=editingPaths.get(id)!;
         const a = map.project(editingPoints[index - 1]), b = map.project(editingPoints[index]);
@@ -86,17 +221,7 @@ export default function MapCanvas(props: Props) {
         const ground=map.project(at),raised=latest.current.mode==='3d'?decks.project([at.lng,at.lat],height):undefined;
         marker.setLngLat(at).setOffset(raised?[raised.x-ground.x,raised.y-ground.y]:[0,0]);
       });
-      endpointHandles.forEach(({ marker,id, index }) => {
-        const editingPoints=editingPaths.get(id)!;
-        const point=editingPoints[index],a=map.project(point);
-        const closed=JSON.stringify(editingPoints[0])===JSON.stringify(editingPoints.at(-1));
-        const previous=editingPoints[index-1] ?? (closed?editingPoints.at(-2):undefined);
-        const next=editingPoints[index+1];
-        let dx=0,dy=0;
-        for(const neighbour of [previous,next])if(neighbour){const b=map.project(neighbour),length=Math.hypot(a.x-b.x,a.y-b.y);if(length>.1){dx+=(a.x-b.x)/length;dy+=(a.y-b.y)/length;}}
-        const length=Math.hypot(dx,dy);
-        marker.setLngLat(point).setOffset(length>.1?[dx/length*26,dy/length*26]:[23,-18]);
-      });
+      renderBridgeGuideSvg();
     };
     try {
       map = new maplibregl.Map({ container: el.current!, center: props.project.center, zoom: 17.5, maxZoom: 22, minZoom: 3, maxPitch: 65, pitch: props.mode === '3d' ? 55 : 0, bearing: props.mode === '3d' ? -22 : 0, attributionControl: false,
@@ -123,6 +248,26 @@ export default function MapCanvas(props: Props) {
     map.on('rotate',renderGpsHeading);
     const manualInteraction = () => {pauseGpsFollow();latest.current.onManualInteraction?.();};
     const canvas = map.getCanvas();
+    let pathBox:{pointer:number;start:{x:number;y:number};box:HTMLDivElement;pan:boolean;boxZoom:boolean}|null=null,suppressBoxClick=false;
+    const boxPoint=(event:PointerEvent)=>{const rect=canvas.getBoundingClientRect();return{x:event.clientX-rect.left,y:event.clientY-rect.top};};
+    const boxDown=(event:PointerEvent)=>{const p=latest.current;if(event.button!==0||!event.shiftKey||event.ctrlKey||event.metaKey||p.tool!=='select')return;const start=boxPoint(event),box=document.createElement('div');Object.assign(box.style,{position:'absolute',pointerEvents:'none',border:'1px solid #38bdf8',background:'rgba(56,189,248,.12)',zIndex:'20'});canvas.parentElement?.appendChild(box);pathBox={pointer:event.pointerId,start,box,pan:map.dragPan.isEnabled(),boxZoom:map.boxZoom.isEnabled()};map.stop();map.dragPan.disable();map.boxZoom.disable();canvas.setPointerCapture(event.pointerId);canvas.style.cursor='crosshair';event.preventDefault();event.stopImmediatePropagation();};
+    const boxMove=(event:PointerEvent)=>{if(!pathBox||event.pointerId!==pathBox.pointer)return;const p=boxPoint(event),box=pathBox.box;Object.assign(box.style,{left:Math.min(p.x,pathBox.start.x)+'px',top:Math.min(p.y,pathBox.start.y)+'px',width:Math.abs(p.x-pathBox.start.x)+'px',height:Math.abs(p.y-pathBox.start.y)+'px'});event.preventDefault();event.stopImmediatePropagation();};
+    const boxFinish=(event:PointerEvent)=>{
+      if(!pathBox||event.pointerId!==pathBox.pointer)return;
+      const drag=pathBox,end=boxPoint(event),rect={left:Math.min(end.x,drag.start.x),right:Math.max(end.x,drag.start.x),top:Math.min(end.y,drag.start.y),bottom:Math.max(end.y,drag.start.y)},ids=new Set<string>(),canvasRect=canvas.getBoundingClientRect();
+      // Point handles are only rendered for the currently editable paths. Box
+      // selection must still find points on every path, including when no path
+      // was selected before the drag began.
+      const selectablePaths=[...latest.current.project.paths,...bridgePaths(latest.current.project.bridges)];
+      const points=selectablePaths.flatMap(path=>path.points.flatMap((coordinate,index)=>{const point=map.project(coordinate);return point.x>=rect.left&&point.x<=rect.right&&point.y>=rect.top&&point.y<=rect.bottom?[{pathId:path.id,index}]:[]}));
+      const project=latest.current.project,insideCoordinates=(coordinates:unknown)=>{let found=false,contained=true;const visit=(value:unknown)=>{if(!Array.isArray(value))return;if(typeof value[0]==='number'&&typeof value[1]==='number'){found=true;const point=map.project([value[0],value[1]]);if(point.x<rect.left||point.x>rect.right||point.y<rect.top||point.y>rect.bottom)contained=false;return;}value.forEach(visit);};visit(coordinates);return found&&contained;};
+      const features=[...objectFeatures(project,null).features,...pathFeatures(project,null).features,...pathFeatures({...project,paths:bridgePaths(project.bridges)},null).features,...project.areas.map(area=>({type:'Feature' as const,properties:{id:area.id},geometry:{type:'Polygon' as const,coordinates:area.rings}}))],containedById=new Map<string,boolean>();
+      for(const feature of features){const id=feature.properties?.id;if(typeof id!=='string')continue;containedById.set(id,(containedById.get(id)??true)&&insideCoordinates(feature.geometry.coordinates));}
+      for(const [id,contained] of containedById)if(contained)ids.add(id);
+      drag.box.remove();if(drag.pan)map.dragPan.enable();if(drag.boxZoom)map.boxZoom.enable();pathBox=null;suppressBoxClick=event.type==='pointerup';if(ids.size||points.length)latest.current.onBoxSelect([...ids],points);if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);canvas.style.cursor='';event.preventDefault();event.stopImmediatePropagation();
+    };
+    const boxClick=(event:MouseEvent)=>{if(!suppressBoxClick)return;suppressBoxClick=false;event.preventDefault();event.stopImmediatePropagation();};
+    canvas.addEventListener('pointerdown',boxDown,true);canvas.addEventListener('pointermove',boxMove,true);canvas.addEventListener('pointerup',boxFinish,true);canvas.addEventListener('pointercancel',boxFinish,true);canvas.addEventListener('click',boxClick,true);
     canvas.addEventListener('pointerdown', manualInteraction, { passive: true });
     canvas.addEventListener('touchstart', manualInteraction, { passive: true });
     canvas.addEventListener('wheel', manualInteraction, { passive: true });
@@ -196,7 +341,8 @@ export default function MapCanvas(props: Props) {
     };
     let referenceReady = false;
     map.on('load', () => {
-      for (const id of ['ground', 'grid', 'areas', 'objects', 'paths', 'path-outlines', 'draft', 'draft-preview', 'target']) map.addSource(id, { type: 'geojson', data: empty });
+      bridgeGuideSvg=document.createElementNS('http://www.w3.org/2000/svg','svg');Object.assign(bridgeGuideSvg.style,{position:'absolute',inset:'0',pointerEvents:'none',zIndex:'4',overflow:'visible'});map.getContainer().append(bridgeGuideSvg);
+      for (const id of ['ground', 'grid', 'areas', 'objects', 'paths', 'path-outlines', 'path-selection', 'draft', 'draft-preview', 'target','bridge-connect-guides','bridge-connect-preview']) map.addSource(id, { type: 'geojson', data: empty });
       map.addLayer({ id: 'ground', type: 'fill', source: 'ground', paint: { 'fill-color': '#d9e3d3', 'fill-opacity': .93 } });
       map.addLayer({ id: 'ground-edge', type: 'line', source: 'ground', paint: { 'line-color': '#6b8f76', 'line-width': 1.5, 'line-dasharray': [4, 3] } });
       map.addLayer({ id: 'grid', type: 'line', source: 'grid', paint: { 'line-color': '#6a8a74', 'line-width': .6, 'line-opacity': .2 } });
@@ -215,15 +361,19 @@ export default function MapCanvas(props: Props) {
       map.addLayer({ id: 'areas-3d', type: 'fill-extrusion', source: 'areas', filter: ['>', ['get', 'height'], 0], paint: { 'fill-extrusion-color': ['case', ['get', 'selected'], '#c1e4ad', '#abc3ad'], 'fill-extrusion-height': ['get', 'height'] } });
       map.addLayer({ id: 'paths', type: 'fill', source: 'paths', paint: { 'fill-color': ['case', ['get', 'selected'], '#efffe0', '#f4efde'] } });
       map.setPaintProperty('paths','fill-color',['case',['get','selected'],'#efffe0',['match',['get','segmentType'],'bridge','#dfb974','underpass','#94aeba','#f4efde']]);
+      map.addLayer({id:'path-selection',type:'line',source:'path-selection',paint:{'line-color':'#d6ff9d','line-width':7,'line-opacity':.95}});
       map.addLayer({id:'not-step-free-paths',type:'fill',source:'paths',filter:['all',['==',['get','access'],'notStepFree'],['==',['get','selected'],true]],paint:{'fill-color':'#c54f3f','fill-opacity':.78}});
       map.addLayer({id:'bridge-edge',type:'line',source:'paths',filter:['==',['get','segmentType'],'bridge'],paint:{'line-color':'#705329','line-width':2}});
       map.addLayer({id:'underpass-edge',type:'line',source:'paths',filter:['==',['get','segmentType'],'underpass'],paint:{'line-color':'#445b68','line-width':2,'line-dasharray':[3,2]}});
+      map.moveLayer('path-selection');
       map.addLayer({ id: 'path-edge', type: 'line', source: 'path-outlines', paint: { 'line-color': '#9b9f84', 'line-width': .8, 'line-opacity': .5 } });
       map.addLayer({ id: 'objects-flat', type: 'fill', source: 'objects', filter:['!', ['in',['get','kind'],['literal',[...areaKinds]]]], paint: { 'fill-color': ['get', 'color'] } });
       map.addLayer({ id: 'objects-3d', type: 'fill-extrusion', source: 'objects', filter:['all',['!', ['in',['get','kind'],['literal',[...areaKinds]]] ],['!=',['get','customModel'],true]], paint: { 'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-base': ['get','base'], 'fill-extrusion-height': ['get', 'height'], 'fill-extrusion-opacity': 1, 'fill-extrusion-vertical-gradient': true } });
       map.addLayer({ id: 'object-edge', type: 'line', source: 'objects', filter:['!', ['in',['get','kind'],['literal',[...areaKinds,'tree']]]], paint: { 'line-color': ['case', ['get', 'selected'], '#173e2b', '#ffffff'], 'line-width': ['case', ['get', 'selected'], 3, 1], 'line-opacity': .8 } });
       map.addLayer(decks);
       map.addLayer(objectModels);
+      map.addLayer({id:'bridge-connect-guides',type:'line',source:'bridge-connect-guides',paint:{'line-color':['match',['get','guideType'],'ramp','#e26358','bridge','#f6d879','underpass','#8fc9f1','#50d7a0'],'line-width':3.5,'line-opacity':.98,'line-dasharray':[1.2,1.2]}});
+      map.addLayer({id:'bridge-connect-preview',type:'circle',source:'bridge-connect-preview',paint:{'circle-radius':8,'circle-color':'#315a37','circle-stroke-color':'#ffffff','circle-stroke-width':3,'circle-opacity':1}});
       map.addLayer({ id: 'draft', type: 'line', source: 'draft', paint: { 'line-color': '#24714b', 'line-width': 4, 'line-dasharray': [2, 1] } });
       map.addLayer({id:'draft-preview',type:'line',source:'draft-preview',paint:{'line-color':'#24714b','line-width':2,'line-opacity':.65,'line-dasharray':[3,2]}});
       for(const layer of ['draft','draft-preview'])map.setPaintProperty(layer,'line-color',['match',['get','segmentType'],'bridge','#ad7832','underpass','#446e91','#24714b']);
@@ -280,14 +430,18 @@ export default function MapCanvas(props: Props) {
       map.setLayoutProperty('tracing-reference-labels','visibility',p.labels?'visible':'none');
       set('walking-route', p.route ? {type:'FeatureCollection',features:[{type:'Feature',properties:{},geometry:{type:'LineString',coordinates:p.route.points}},... [p.route.points[0],p.route.points.at(-1)!].map(at=>({type:'Feature' as const,properties:{},geometry:{type:'Point' as const,coordinates:at}}))]} : empty);
       set('walking-access', p.route ? {type:'FeatureCollection',features:p.route.access.map(points=>({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:points}}))} : empty);
+      const guidePaths=drawingGuidePaths(p.tool);
+      set('bridge-connect-guides',drawingGuideData(guidePaths));
       set('ground', { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [groundRing(p.project)] } });
       decks.update(p.project,p.selected,p.mode,p.route);
       objectModels.update(p.project,p.mode);
-      set('grid', gridFeatures(p.project)); set('objects', objectFeatures(p.project, p.selected)); const paths=pathFeatures(p.project,p.selected),bridgeFeatures=pathFeatures({...p.project,paths:bridgePaths(p.project.bridges)},p.selected);paths.features.push(...bridgeFeatures.features);set('paths',paths);set('path-outlines',pathOutlineFeatures({...paths,features:paths.features.filter(feature=>p.mode!=='3d'||!feature.properties?.elevated)}));
+      const boxSelected=new Set(p.boxSelectedIds??[]);set('grid', gridFeatures(p.project));const objects=objectFeatures(p.project,p.selected);for(const feature of objects.features)feature.properties!.selected=p.boxSelectionActive?boxSelected.has(String(feature.properties?.id)):String(feature.properties?.id)===p.selected;set('objects',objects);const paths=pathFeatures(p.project,p.selected),bridgeFeatures=pathFeatures({...p.project,paths:bridgePaths(p.project.bridges)},p.selected);paths.features.push(...bridgeFeatures.features);for(const feature of paths.features)feature.properties!.selected=p.boxSelectionActive?boxSelected.has(String(feature.properties?.id)):Boolean(feature.properties?.selected);set('paths',paths);set('path-outlines',pathOutlineFeatures({...paths,features:paths.features.filter(feature=>p.mode!=='3d'||!feature.properties?.elevated)}));
+      const selectedSegments=new Map<string,number[]>();for(const vertex of p.pathVertices??[])selectedSegments.set(vertex.pathId,[...(selectedSegments.get(vertex.pathId)??[]),vertex.index]);
+      set('path-selection',{type:'FeatureCollection',features:[...selectedSegments].flatMap(([id,indices])=>{const route=p.project.paths.find(path=>path.id===id)??bridgePaths(p.project.bridges).find(path=>path.id===id),sorted=[...new Set(indices)].sort((a,b)=>a-b);if(!route||sorted.length<2)return[];const from=sorted[0],to=sorted.at(-1)!;return [{type:'Feature' as const,properties:{id},geometry:{type:'LineString' as const,coordinates:route.points.slice(from,to+1)}}];})});
       map.setFilter('paths',p.mode==='3d'?['!=',['get','elevated'],true]:null);
       for(const [layer,type] of [['bridge-edge','bridge'],['underpass-edge','underpass']])map.setFilter(layer,p.mode==='3d'?['all',['==',['get','segmentType'],type],['!=',['get','elevated'],true]]:['==',['get','segmentType'],type]);
       for(const layer of ['walking-route-outline','walking-route-line','walking-route-ends'])map.setLayoutProperty(layer,'visibility',p.mode==='3d'&&p.route?.heights?.some(height=>height>0)?'none':'visible');
-      set('areas', { type: 'FeatureCollection', features: p.project.areas.map(a => ({ type: 'Feature', properties: { id: a.id, height: a.height, selected: a.id === p.selected }, geometry: { type: 'Polygon', coordinates: a.rings } })) });
+      set('areas', { type: 'FeatureCollection', features: p.project.areas.map(a => ({ type: 'Feature', properties: { id: a.id, height: a.height, selected: p.boxSelectionActive?boxSelected.has(a.id):a.id===p.selected }, geometry: { type: 'Polygon', coordinates: a.rings } })) });
       map.setPaintProperty('draft-area','fill-color',p.tool==='ground'?'#d9e3d3':isAreaKind(p.tool)?kinds[p.tool].color:'#91b886');
       set('target', { type: 'FeatureCollection', features: p.target ? [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p.target } }] : [] } as FeatureCollection<Point>);
       const referenceVisible=p.reference&&!(p.ground&&p.project.layout!=='route');
@@ -299,10 +453,15 @@ export default function MapCanvas(props: Props) {
       map.setLayoutProperty('objects-flat', 'visibility', p.mode === '2d' ? 'visible' : 'none');
       map.setLayoutProperty('objects-3d', 'visibility', p.mode === '3d' ? 'visible' : 'none');
       map.setLayoutProperty('areas-3d', 'visibility', p.mode === '3d' ? 'visible' : 'none');
+      const drawingGuideActive=['bridge','path','underpass'].includes(p.tool);
+      map.setLayoutProperty('bridge-connect-guides','visibility',drawingGuideActive&&p.mode==='2d'?'visible':'none');renderBridgeGuideSvg();
+      map.setLayoutProperty('bridge-connect-preview','visibility',drawingGuideActive&&p.mode==='2d'?'visible':'none');
+      if(!drawingGuideActive){setBridgePreview(empty);if(bridgePreviewNode)bridgePreviewNode.style.display='none';bridgeHoverTarget=null;}
       map.getCanvas().style.cursor = p.tool === 'select' || p.tool === 'preview' || p.tool==='edit-ground' ? 'grab' : 'crosshair';
       if(p.tool==='path' || isBoundaryTool(p.tool) || p.tool==='extend-start' || p.tool==='extend-end')map.boxZoom.disable();else map.boxZoom.enable();
       const focusLabel = document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('path-vertex') ? document.activeElement.getAttribute('aria-label') : null;
-      markers.current.forEach(m => m.remove()); markers.current = [];objectLabelMarkers=[]; endpointHandles = []; midpointHandles = []; editingPaths.clear();vertexHandles=[];snapTargets=[];groundPoints=[];groundMidpoints=[];
+      pathDragCleanups.forEach(cleanup=>cleanup());pathDragCleanups=[];
+      markers.current.forEach(m => m.remove()); markers.current = [];objectLabelMarkers=[]; midpointHandles = []; editingPaths.clear();vertexHandles=[];snapTargets=[];groundPoints=[];groundMidpoints=[];
       if (p.labels) for (const o of p.project.objects) {
         if(o.kind==='tree'||o.kind==='waterArea'||o.kind==='scenery')continue;
         const node = document.createElement('button'); node.type = 'button'; node.dataset.kind=o.kind; node.className = `map-label ${p.selected === o.id ? 'selected' : ''}${o.customModel&&p.mode==='3d'?' map-label-custom-model':''}`;
@@ -325,11 +484,14 @@ export default function MapCanvas(props: Props) {
         markers.current.push(marker);
       }
       const linked=connectedPathIds(p.project,p.selected),seenVertices=new Set<string>();
-      const editablePaths=(p.pathVertices?.length?p.project.paths:p.project.paths.filter(path=>linked.has(path.id))).sort((a,b)=>Number(b.id===p.selected)-Number(a.id===p.selected));
+      const editablePaths=[...(p.pathVertices?.length?p.project.paths:p.project.paths.filter(path=>linked.has(path.id))),...bridgePaths(p.project.bridges).filter(path=>path.id===p.selected)].sort((a,b)=>Number(b.id===p.selected)-Number(a.id===p.selected));
       for(const path of editablePaths)if(p.tool==='select'){
         editingPaths.set(path.id,path.points);
+        const isBridgePoint=!(p.project.paths.some(candidate=>candidate.id===path.id));
+        const bridgeHandleKeys=isBridgePoint?new Set(bridgeHandlePoints(p.project.bridges?.find(bridge=>bridge.id===path.id)?.sourcePoints??path.points).map(point=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`)):null;
         const closed = JSON.stringify(path.points[0]) === JSON.stringify(path.points.at(-1));
         path.points.forEach((point, index) => {
+          if(bridgeHandleKeys&&!bridgeHandleKeys.has(`${point[0].toFixed(9)},${point[1].toFixed(9)}`))return;
           const pointKey=JSON.stringify(point);
           if ((!closed || index < path.points.length - 1) && !seenVertices.has(pointKey)) {
           seenVertices.add(pointKey);
@@ -340,20 +502,51 @@ export default function MapCanvas(props: Props) {
           node.className = `path-vertex ${notStepFreePoint?'not-step-free':''} ${p.selected===path.id && p.pathVertex === index ? 'active' : ''} ${p.pathVertices?.some(selected=>selected.pathId===path.id&&selected.index===index) ? 'range-selected' : ''}`;
           node.setAttribute('aria-label',p.selected===path.id?`Path point ${index+1}`:`${path.name} point ${index+1}`);node.dataset.pathId=path.id;
           node.title = `Point ${index + 1} · drag to move, right-click to remove`;
-          node.addEventListener('click', e => { e.stopPropagation(); node.focus({ preventScroll: true }); latest.current.onPathSelect(path.id,index,(e as MouseEvent).shiftKey); });
+          node.addEventListener('click', e => { e.stopPropagation(); node.focus({ preventScroll: true }); const event=e as MouseEvent;latest.current.onPathSelect(path.id,index,event.ctrlKey||event.metaKey); });
+          // Marker dragging is handled through MapLibre's map-level mouse/touch
+          // listeners. Disable only map panning for the gesture; stopping
+          // propagation here would prevent MapLibre from moving the marker.
+          let restorePan = false;
+          const pauseMapPan = () => { node.classList.add('path-vertex-held'); restorePan = map.dragPan.isEnabled(); if (restorePan) map.dragPan.disable(); };
+          const resumeMapPan = () => { node.classList.remove('path-vertex-held'); if (restorePan) map.dragPan.enable(); restorePan = false; };
+          node.addEventListener('mousedown', pauseMapPan);
+          node.addEventListener('touchstart', pauseMapPan, { passive: true });
+          window.addEventListener('mouseup', resumeMapPan);
+          window.addEventListener('touchend', resumeMapPan);
+          window.addEventListener('touchcancel', resumeMapPan);
+          pathDragCleanups.push(()=>{resumeMapPan();window.removeEventListener('mouseup',resumeMapPan);window.removeEventListener('touchend',resumeMapPan);window.removeEventListener('touchcancel',resumeMapPan);});
           node.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); latest.current.onPathRemove(path.id, index); });
           node.addEventListener('keydown', e => { if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); latest.current.onPathRemove(path.id, index); } });
           const marker = new maplibregl.Marker({ element: node, anchor: 'center', draggable: true }).setLngLat(point).addTo(map);
+          let draggedTo: Coord | null = null;
+          marker.on('dragstart',()=>{activeVertexDrag={id:path.id,index,at:point};const guides=drawingGuidePaths(vertexDragTool(path.id,index)).filter(candidate=>candidate.path.id!==path.id),source=map.getSource('bridge-connect-guides') as GeoJSONSource|undefined;source?.setData(drawingGuideData(guides));map.setLayoutProperty('bridge-connect-guides','visibility',latest.current.mode==='2d'?'visible':'none');map.setLayoutProperty('bridge-connect-preview','visibility',latest.current.mode==='2d'?'visible':'none');const movePreview=(event:PointerEvent|MouseEvent)=>{const bounds=map.getContainer().getBoundingClientRect();updateVertexSnapPreview({x:event.clientX-bounds.left,y:event.clientY-bounds.top},path.id);};window.addEventListener('pointermove',movePreview,true);window.addEventListener('mousemove',movePreview,true);pathDragCleanups.push(()=>{window.removeEventListener('pointermove',movePreview,true);window.removeEventListener('mousemove',movePreview,true);});renderBridgeGuideSvg();});
           marker.on('drag', () => {
-            const at = marker.getLngLat(); const next = moveConnectedPathVertex(latest.current.project,path.id,index,[at.lng,at.lat]);
+            const at = marker.getLngLat(); draggedTo=[at.lng,at.lat];if(activeVertexDrag)activeVertexDrag.at=draggedTo;
+            const ground=map.project(draggedTo),offset=marker.getOffset();updateVertexSnapPreview({x:ground.x+offset.x,y:ground.y+offset.y},path.id);
+            const next = moveConnectedPathVertex(latest.current.project,path.id,index,draggedTo);
             decks.update(next,latest.current.selected,latest.current.mode,latest.current.route);
-            const paths=pathFeatures(next,path.id);set('paths',paths);set('path-outlines',pathOutlineFeatures(paths));
-            editingPaths=new Map(next.paths.map(path=>[path.id,path.points]));positionEnds();
+            const routes=[...next.paths,...bridgePaths(next.bridges)],paths=pathFeatures({...next,paths:routes},path.id);set('paths',paths);set('path-outlines',pathOutlineFeatures({...paths,features:paths.features.filter(feature=>latest.current.mode!=='3d'||!feature.properties?.elevated)}));
+            editingPaths=new Map(routes.map(route=>[route.id,isBridgePoint&&route.id===path.id?path.points.map(original=>original[0]===point[0]&&original[1]===point[1]?draggedTo!:original):route.points]));
+            renderBridgeGuideSvg();
           });
-          marker.on('dragend', () => { const at = marker.getLngLat(); latest.current.onPathMove(path.id, index, [at.lng, at.lat]); });
+          marker.on('dragend', () => {
+            const at=draggedTo??[marker.getLngLat().lng,marker.getLngLat().lat];draggedTo=null;activeVertexDrag=null;updateDrawingSnapHighlight(null);map.setLayoutProperty('bridge-connect-guides','visibility','none');map.setLayoutProperty('bridge-connect-preview','visibility','none');setBridgePreview({type:'FeatureCollection',features:[]});if(bridgePreviewNode)bridgePreviewNode.style.display='none';renderBridgeGuideSvg();
+            const ground=map.project(at),offset=marker.getOffset(),screen={x:ground.x+offset.x,y:ground.y+offset.y},dragTool=vertexDragTool(path.id,index),candidates=drawingGuidePaths(dragTool).filter(candidate=>candidate.path.id!==path.id);
+            type PathSnap={distance:number;pathId:string;segment:number;at:Coord};
+            let vertexSnap:PathSnap|null=null;
+            for(const guide of candidates)for(let pointIndex=0;pointIndex<guide.path.points.length;pointIndex++){
+              const candidate=guide.path,point=candidate.points[pointIndex],height=candidate.heights?.[pointIndex]??0,projected=latest.current.mode==='3d'?decks.project(point,height)??map.project(point):map.project(point),distance=Math.hypot(screen.x-projected.x,screen.y-projected.y);
+              if(!drawingGuidePointIndices(guide).includes(pointIndex))continue;
+              if(Number.isFinite(distance)&&(!vertexSnap||distance<vertexSnap.distance))vertexSnap={distance,pathId:candidate.id,segment:guide.offset+Math.max(0,Math.min(candidate.points.length-2,pointIndex-1)),at:point};
+            }
+            let snap:PathSnap|null=vertexSnap&&vertexSnap.distance<=14?vertexSnap:null;
+            if(!snap){const nearest=nearestDrawingLine(screen,dragTool,path.id);if(nearest&&nearest.distance<=14)snap={distance:nearest.distance,pathId:nearest.id,segment:nearest.segment,at:nearest.at};}
+            const connectTo=snap&&snap.distance<=14?{pathId:snap.pathId,segment:snap.segment,at:snap.at}:undefined;
+            latest.current.onPathMove(path.id,index,connectTo?.at??at,connectTo);
+          });
           markers.current.push(marker);vertexHandles.push({marker,id:path.id,index});
           }
-          if (index > 0 && path.points.length < 200) {
+          if (!isBridgePoint && index > 0 && path.points.length < 200) {
             const before = path.points[index - 1];
             const midpoint: Coord = [(before[0] + point[0]) / 2, (before[1] + point[1]) / 2];
             const add = document.createElement('button'); add.type = 'button'; add.className = 'path-midpoint';
@@ -362,15 +555,6 @@ export default function MapCanvas(props: Props) {
             add.addEventListener('click', e => { e.stopPropagation(); const at = midpointMarker.getLngLat(); latest.current.onPathInsert(path.id, index, [at.lng, at.lat]); });
             markers.current.push(midpointMarker); midpointHandles.push({ marker: midpointMarker,id:path.id, index });
           }
-        });
-        path.points.forEach((point,index)=>{
-          if(closed && index===path.points.length-1)return;
-          if(p.selected!==path.id || p.pathVertex!==index)return;
-          const add=document.createElement('button');add.type='button';add.className='path-midpoint path-branch';
-          add.setAttribute('aria-label',`Branch from path point ${index+1}`);add.title=`Start a new path from point ${index+1}`;
-          add.addEventListener('click',e=>{e.stopPropagation();latest.current.onPathBranch(path.id,index);});
-          const marker=new maplibregl.Marker({element:add,anchor:'center'}).setLngLat(point).addTo(map);
-          markers.current.push(marker);endpointHandles.push({marker,id:path.id,index});
         });
         positionEnds();
         if (focusLabel) markers.current.find(m => m.getElement().getAttribute('aria-label') === focusLabel)?.getElement().focus({ preventScroll: true });
@@ -401,24 +585,39 @@ export default function MapCanvas(props: Props) {
         positionEnds();
         if(focusLabel)markers.current.find(m=>m.getElement().getAttribute('aria-label')===focusLabel)?.getElement().focus({preventScroll:true});
       }
-      const addSnap=(at:Coord,label:string,_number:string,closeLoop=false)=>{
-        if(!closeLoop && snapTargets.some(t=>t.at[0]===at[0] && t.at[1]===at[1]))return;
+      const addSnap=(at:Coord,label:string,_number:string,closeLoop=false,height=0,onSelect?:()=>void)=>{
+        if(!closeLoop && snapTargets.some(t=>t.at[0]===at[0] && t.at[1]===at[1]&&Math.abs(t.height-height)<.001))return;
         const node=document.createElement('button');node.type='button';node.className='path-connect-target';node.title=label;node.setAttribute('aria-label',label);
-        node.addEventListener('click',e=>{e.stopPropagation();latest.current.onConnect(at,closeLoop);});
-        markers.current.push(new maplibregl.Marker({element:node,anchor:'center'}).setLngLat(at).addTo(map));
-        const target={at,node,closeLoop};if(closeLoop)snapTargets.unshift(target);else snapTargets.push(target);
+        node.addEventListener('click',e=>{e.stopPropagation();if(onSelect)onSelect();else latest.current.onConnect(at,closeLoop,height);});
+        const ground=map.project(at),raised=latest.current.mode==='3d'&&height>0?decks.project(at,height):undefined,marker=new maplibregl.Marker({element:node,anchor:'center',offset:raised?[raised.x-ground.x,raised.y-ground.y]:[0,0]}).setLngLat(at).addTo(map);
+        markers.current.push(marker);
+        const target={at,node,marker,closeLoop,height};if(closeLoop)snapTargets.unshift(target);else snapTargets.push(target);
       };
-      if(p.tool==='path' || p.tool==='extend-start' || p.tool==='extend-end') {
-        for(const route of p.project.paths)route.points.forEach((at,index)=>{
-          if(pathVertexKey(route,index)!=='height:0.000')return;
+      if(p.tool==='path' || p.tool==='bridge' || p.tool==='underpass' || p.tool==='extend-start' || p.tool==='extend-end') {
+        const bridgeIds=new Set((p.project.bridges??[]).map(bridge=>bridge.id));
+        for(const route of [...p.project.paths,...bridgePaths(p.project.bridges)])route.points.forEach((at,index)=>{
           const last=route.points.length-1,closed=JSON.stringify(route.points[0])===JSON.stringify(route.points[last]);
+          if(bridgeIds.has(route.id)||pathVertexKey(route,index)!=='height:0.000')return;
           if(closed && index===last)return;
           if(route.id===p.selected && ((p.tool==='extend-start' && index===0) || (p.tool==='extend-end' && index===last)))return;
           if(p.draft.length && JSON.stringify(at)===JSON.stringify(p.draft.at(-1)))return;
           const label=!closed && index===0?'start':!closed && index===last?'end':`point ${index+1}`;
-          addSnap(at,`Connect to ${route.name} ${label}`,String(index+1));
+          addSnap(at,`Connect to ${route.name} ${label}`,String(index+1),false,route.heights?.[index]??0);
         });
       }
+      if(p.tool==='path'||p.tool==='underpass')for(const endpoint of bridgeRampEndpoints()){
+        const node=document.createElement('button');node.type='button';node.className='path-connect-target';node.title='Connect to this bridge ramp or steps';node.setAttribute('aria-label','Connect to this bridge ramp or steps');
+        node.addEventListener('click',event=>{event.stopPropagation();const current=latest.current;if((current.tool==='path'||current.tool==='underpass')&&current.draft.length){current.onClick(endpoint.at);return;}if(current.tool==='path'||current.tool==='underpass')current.onPathBranchAt(endpoint.id,endpoint.at,0,undefined,current.tool);});
+        const marker=new maplibregl.Marker({element:node,anchor:'center'}).setLngLat(endpoint.at).addTo(map);markers.current.push(marker);
+      }
+      if(p.tool==='bridge')for(const bridge of p.project.bridges??[]){
+        const source=bridge.sourcePoints??bridge.points,profile=bridgePaths([bridge])[0],key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`,endpoints=new Set(bridgeEndpoints(source).map(key)),junctions=new Set(bridgeJunctions(source).map(key));
+        for(const at of bridgeHandlePoints(source)){
+          const index=source.findIndex(point=>key(point)===key(at)),profileIndex=profile.points.findIndex(point=>key(point)===key(at)),kind=endpoints.has(key(at))?(index===0?'start':'end'):junctions.has(key(at))?'junction':'turn',height=profile.heights?.[profileIndex]??bridge.height;
+          addSnap(at,`Connect to ${bridge.name} ${kind}`,String(index+1),false,height,()=>latest.current.onBridgeBranchAt(bridge.id,at));
+        }
+      }
+      if(!['bridge','path','underpass'].includes(p.tool)){bridgePreviewMarker?.remove();bridgePreviewMarker=null;bridgePreviewNode=null;bridgeHoverTarget=null;}
       if((p.tool==='path' || isBoundaryTool(p.tool)) && p.draft.length>=3)addSnap(p.draft[0],isBoundaryTool(p.tool)?`Close ${p.tool} boundary at point 1`:'Close path at point 1','1',true);
       renderDraft();scheduleLabels();renderGpsHeading();
     }
@@ -481,7 +680,18 @@ export default function MapCanvas(props: Props) {
       if(Date.now()<objectClickBlockedUntil)return;
       if(p.tool==='measure')return;
       referencePopup?.remove();referencePopup=null;
-      const target=nearestTarget(e.point);if(target){p.onConnect(target.at,target.closeLoop);return;}
+      if(p.tool==='bridge'||p.tool==='path'||p.tool==='underpass'){
+        const endpoint=nearestBridgeRampEndpoint(e.point);
+        if(endpoint&&endpoint.distance<=24){if((p.tool==='path'||p.tool==='underpass')&&p.draft.length)p.onClick(endpoint.at);else if(p.tool==='bridge')p.onBridgeBranchAt(endpoint.id,endpoint.at);else p.onPathBranchAt(endpoint.id,endpoint.at,0,undefined,p.tool);return;}
+      }
+      const target=nearestTarget(e.point);if(target){p.onConnect(target.at,target.closeLoop,target.height);return;}
+      if(p.tool==='bridge'){
+        const lineTarget=nearestDrawingLine(e.point,'bridge');
+        if(lineTarget&&lineTarget.distance<=14){if(lineTarget.kind==='bridge'&&lineTarget.id!==DRAFT_PATH_ID)p.onBridgeBranchAt(lineTarget.id,lineTarget.at);else p.onPathBranchAt(lineTarget.id,lineTarget.at,lineTarget.segment,lineTarget.pointIndex,'bridge');return;}
+      }else if(p.tool==='path'||p.tool==='underpass'){
+        const lineTarget=nearestDrawingLine(e.point,p.tool);
+        if(lineTarget&&lineTarget.distance<=14){p.onPathBranchAt(lineTarget.id,lineTarget.at,lineTarget.segment,lineTarget.pointIndex,p.tool);return;}
+      }
       const hits = map.queryRenderedFeatures(e.point, { layers: ['objects-flat', 'objects-3d', 'paths', 'areas-flat', 'areas-3d', 'camping'] });
       const deckHit=decks.pick(e.point),modelHit=objectModels.pick(e.point),hitId=deckHit?.id??modelHit??hits[0]?.properties?.id;
       if(p.tool==='select' && !hits.length&&!deckHit&&!modelHit){
@@ -498,6 +708,11 @@ export default function MapCanvas(props: Props) {
       const at=resolveDrawingPoint([e.lngLat.lng,e.lngLat.lat],e.point,e.originalEvent.shiftKey);
       const clickedPath=p.project.paths.find(path=>path.id===hitId);
       let clickedSection=deckHit?.section??Number(hits[0]?.properties?.segmentStart??0);
+      if(p.tool==='select'&&clickedPath&&(e.originalEvent.ctrlKey||e.originalEvent.metaKey)){
+        const profile=pathProfile(clickedPath);let nearest:{distance:number;segment:number}|null=null;
+        for(let sample=0;sample<profile.length-1;sample++){const a=map.project(profile[sample].position),b=map.project(profile[sample+1].position),dx=b.x-a.x,dy=b.y-a.y,length=dx*dx+dy*dy,t=length?Math.max(0,Math.min(1,((e.point.x-a.x)*dx+(e.point.y-a.y)*dy)/length)):0,distance=Math.hypot(e.point.x-(a.x+t*dx),e.point.y-(a.y+t*dy)),segment=Math.max(0,Math.min(clickedPath.points.length-2,profile[sample].segment));if(Number.isFinite(distance)&&(!nearest||distance<nearest.distance))nearest={distance,segment};}
+        if(nearest)p.onPathSegmentSelect(clickedPath.id,nearest.segment,e.originalEvent.ctrlKey||e.originalEvent.metaKey);return;
+      }
       if(p.tool==='select'&&clickedPath){p.onClick(at,clickedPath.id);return;}
       if(p.tool==='preview'&&clickedPath){
         const content=document.createElement('div'),name=document.createElement('strong'),details=document.createElement('div');
@@ -508,22 +723,45 @@ export default function MapCanvas(props: Props) {
       p.onClick(at, p.tool === 'select'||p.tool==='preview' ? hitId : undefined);
     });
     let lastCursor = 0; map.on('mousemove', e => {
+      if(!ready)return;
       if(objectDrag){canvas.style.cursor='grabbing';return;}
       pointer={x:e.point.x,y:e.point.y};shiftHeld=e.originalEvent.shiftKey;renderDraft();
-      if(ready && snapTargets.length){const target=nearestTarget(e.point);snapTargets.forEach(t=>t.node.classList.toggle('snap-highlight',t===target));map.getCanvas().style.cursor=target?'pointer':'crosshair';}
+      let bridgeEndpointHovered=false;
+      if(['bridge','path','underpass'].includes(latest.current.tool)){
+        const activeTool=latest.current.tool as 'bridge'|'path'|'underpass';
+        const existingSnap=nearestTarget(e.point);
+        const endpoint=nearestBridgeRampEndpoint(e.point);
+        const lineTarget=existingSnap?undefined:nearestDrawingLine(e.point,activeTool),endpointTarget=endpoint&&endpoint.distance<=24;
+        bridgeEndpointHovered=Boolean(endpointTarget||existingSnap);
+        const target=endpointTarget?{...endpoint!,height:0,segment:0,kind:'bridge' as const}:existingSnap?undefined:lineTarget;
+        if(target&&target.distance<=(endpointTarget?24:14)){
+          setBridgePreview(empty);
+          bridgeHoverTarget={id:target.id,at:target.at,height:target.height,segment:target.segment,pointIndex:'pointIndex'in target?target.pointIndex:undefined,tool:activeTool};
+          if(!target.at.every(Number.isFinite)){bridgeHoverTarget=null;setBridgePreview(empty);if(bridgePreviewNode)bridgePreviewNode.style.display='none';return;}
+          if(endpointTarget){if(bridgePreviewNode)bridgePreviewNode.style.display='none';canvas.style.cursor='pointer';}
+          else{
+          const ground=map.project(target.at),raised=latest.current.mode==='3d'?decks.project(target.at,target.height):undefined;
+          if(!bridgePreviewMarker){bridgePreviewNode=document.createElement('div');bridgePreviewNode.className='path-vertex';bridgePreviewNode.setAttribute('aria-hidden','true');bridgePreviewNode.style.pointerEvents='none';bridgePreviewMarker=new maplibregl.Marker({element:bridgePreviewNode,anchor:'center'}).setLngLat(target.at).addTo(map);}
+          bridgePreviewMarker.setLngLat(target.at).setOffset(latest.current.mode==='3d'&&raised?[raised.x-ground.x,raised.y-ground.y]:[0,0]);
+          bridgePreviewMarker.getElement().style.zIndex='20';bridgePreviewNode!.style.display='block';
+          canvas.style.cursor='pointer';
+          }
+        }else{bridgeHoverTarget=null;setBridgePreview(empty);if(bridgePreviewNode)bridgePreviewNode.style.display='none';}
+      }else{bridgeHoverTarget=null;setBridgePreview(empty);if(bridgePreviewNode)bridgePreviewNode.style.display='none';}
+      if(ready && snapTargets.length){const target=nearestTarget(e.point);snapTargets.forEach(t=>t.node.classList.toggle('snap-highlight',t===target));map.getCanvas().style.cursor=target||bridgeEndpointHovered?'pointer':'crosshair';}
       if (ready && latest.current.tool === 'select') {
         const hits = map.queryRenderedFeatures(e.point, { layers: ['objects-flat', 'objects-3d', 'paths', 'areas-flat', 'areas-3d', 'camping'] });
         map.getCanvas().style.cursor = decks.pick(e.point)||objectModels.pick(e.point)||hits.length ? 'pointer' : 'grab';
       }
       if (Date.now() - lastCursor > 100) { lastCursor = Date.now(); latest.current.onCursor([e.lngLat.lng, e.lngLat.lat]); }
     });
-    map.on('mouseout',()=>{pointer=null;renderDraft();});
+    map.on('mouseout',()=>{pointer=null;bridgeHoverTarget=null;(map.getSource('bridge-connect-preview') as GeoJSONSource|undefined)?.setData(empty);if(bridgePreviewNode)bridgePreviewNode.style.display='none';renderDraft();});
     map.on('move',renderDraft);window.addEventListener('keydown',shiftChange);window.addEventListener('keyup',shiftChange);
     map.on('error', e => { if (latest.current.reference) latest.current.onError(`Reference tiles could not load. Your event layout is still editable. ${e.error?.message?.slice(0, 80) ?? ''}`); });
-    const resize = new ResizeObserver(() => map.resize()); resize.observe(el.current!);
-    return () => { cancelAnimationFrame(labelFrame);map.off('rotate',renderGpsHeading);map.off('move',scheduleLabels);map.off('resize',scheduleLabels);canvas.removeEventListener('pointerdown', manualInteraction); canvas.removeEventListener('touchstart', manualInteraction); canvas.removeEventListener('wheel', manualInteraction); ready = false;lengthLabel.remove();window.removeEventListener('keydown',shiftChange);window.removeEventListener('keyup',shiftChange);map.off('move',renderDraft); resize.disconnect(); el.current?.removeEventListener('project-update', updateListener); map.off('move', positionEnds); endpointHandles = []; markers.current.forEach(m => m.remove()); map.remove(); mapRef.current = null;latest.current.onMapReady?.(null); props.actions.current = null; };
+    const resize = new ResizeObserver(() => {map.resize();renderBridgeGuideSvg();}); resize.observe(el.current!);
+    return () => { pathBox?.box.remove();if(pathBox?.pan)map.dragPan.enable();if(pathBox?.boxZoom)map.boxZoom.enable();canvas.removeEventListener('pointerdown',boxDown,true);canvas.removeEventListener('pointermove',boxMove,true);canvas.removeEventListener('pointerup',boxFinish,true);canvas.removeEventListener('pointercancel',boxFinish,true);canvas.removeEventListener('click',boxClick,true);cancelAnimationFrame(labelFrame);map.off('rotate',renderGpsHeading);map.off('move',scheduleLabels);map.off('resize',scheduleLabels);canvas.removeEventListener('pointerdown', manualInteraction); canvas.removeEventListener('touchstart', manualInteraction); canvas.removeEventListener('wheel', manualInteraction); ready = false;lengthLabel.remove();bridgeGuideSvg?.remove();bridgePreviewMarker?.remove();window.removeEventListener('keydown',shiftChange);window.removeEventListener('keyup',shiftChange);map.off('move',renderDraft); resize.disconnect(); el.current?.removeEventListener('project-update', updateListener); map.off('move', positionEnds); markers.current.forEach(m => m.remove()); map.remove(); mapRef.current = null;latest.current.onMapReady?.(null); props.actions.current = null; };
   }, []);
-  useEffect(() => { el.current?.dispatchEvent(new Event('project-update')); }, [props.pathType,props.draftTypes,props.route, props.project, props.selected, props.tool, props.reference, props.ground,props.boundary,props.groundVertex, props.grid, props.labels, props.draft, props.target, props.pathVertex,props.pathVertices]);
+  useEffect(() => { el.current?.dispatchEvent(new Event('project-update')); }, [props.pathType,props.draftTypes,props.route, props.project, props.selected,props.boxSelectedIds,props.boxSelectionActive, props.tool, props.reference, props.ground,props.boundary,props.groundVertex, props.grid, props.labels, props.draft, props.target, props.pathVertex,props.pathVertices]);
   useEffect(() => { const map = mapRef.current; if (!map) return; map.easeTo({ pitch: props.mode === '3d' ? 55 : 0, duration: 550 }); el.current?.dispatchEvent(new Event('project-update')); }, [props.mode]);
   return <div ref={el} className="map-canvas" aria-label="Interactive geographically aligned event map" />;
 }

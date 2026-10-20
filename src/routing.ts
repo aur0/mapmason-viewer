@@ -8,8 +8,11 @@ const projectPoint = (n: Pick<PathNetwork,'origin'|'scale'>, p: Coord): Coord =>
 
 export function createPathNetwork(project: EventProject): PathNetwork {
   const network: PathNetwork = { points: [],heights:[], xy: [], edges: [], segments: [], inaccessiblePoints:new Set(), origin: project.center, scale: 111195*Math.cos(project.center[1]*Math.PI/180) };
+  const shapePoints:{id:string;point:Coord;node:number;height:number;width:number}[]=[];
   const ids = new Map<string, number>();
   const coordinateKey=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
+  const underpassJunctions=new Set<string>();
+  for(const path of [...project.paths,...bridgePaths(project.bridges)])for(const section of pathSections(path))if(section.type==='underpass')for(const point of section.path.points.slice(1,-1))underpassJunctions.add(coordinateKey(point));
   const blockedPointKeys=new Set<string>();
   const coveredBridgeSegments=new Set<string>(),blockedBridgeSegments=new Set<string>();
   for(const bridge of project.bridges??[]){
@@ -39,11 +42,25 @@ export function createPathNetwork(project: EventProject): PathNetwork {
       const isBridge=section.type==='bridge'||(legacyPath&&coveredBridgeSegments.has(`${path.id}:${pathSegment}`));
       const wheelchairAccessible=(section.type!=='bridge'||access==='stepFree')&&!(legacyPath&&blockedBridgeSegments.has(`${path.id}:${pathSegment}`));
       const physical=path.heights?.some(height=>height>0)??false;
-      const a=node(points[i-1],i===1?0:level,samples[i-1].height,physical), b=node(points[i],i===points.length-1?0:level,samples[i].height,physical), length=Math.hypot(distance(network.xy[a],network.xy[b]),samples[i].height-samples[i-1].height);
+      const startLevel=i===1?(underpassJunctions.has(coordinateKey(points[i-1]))?-1:0):level,endLevel=i===points.length-1?(underpassJunctions.has(coordinateKey(points[i]))?-1:0):level;
+      const a=node(points[i-1],startLevel,samples[i-1].height,physical), b=node(points[i],endLevel,samples[i].height,physical), length=Math.hypot(distance(network.xy[a],network.xy[b]),samples[i].height-samples[i-1].height);
+      shapePoints.push({id:path.id,point:points[i-1],node:a,height:samples[i-1].height,width:path.width},{id:path.id,point:points[i],node:b,height:samples[i].height,width:path.width});
       if (length < .001) continue;
       network.segments.push({a,b,length,width:path.width,wheelchairAccessible,isBridge}); network.edges[a].push({to:b,length,width:path.width,wheelchairAccessible,isBridge}); network.edges[b].push({to:a,length,width:path.width,wheelchairAccessible,isBridge});
     }
     }
+  }
+  const pointsByCoordinate=new Map<string,typeof shapePoints>(),linkedPointPairs=new Set<string>();
+  for(const point of shapePoints){
+    const key=coordinateKey(point.point),coincident=pointsByCoordinate.get(key)??[];
+    for(const other of coincident){
+      if(other.id===point.id||Math.abs(other.height-point.height)>.001||other.node===point.node)continue;
+      const pair=other.node<point.node?`${other.node}:${point.node}`:`${point.node}:${other.node}`;if(linkedPointPairs.has(pair))continue;linkedPointPairs.add(pair);
+      const width=Math.max(.5,other.width,point.width);
+      network.edges[point.node].push({to:other.node,length:0,width,wheelchairAccessible:true,isBridge:false});
+      network.edges[other.node].push({to:point.node,length:0,width,wheelchairAccessible:true,isBridge:false});
+    }
+    coincident.push(point);pointsByCoordinate.set(key,coincident);
   }
   network.points.forEach((point,index)=>{if(blockedPointKeys.has(coordinateKey(point)))network.inaccessiblePoints.add(index);});
   return network;

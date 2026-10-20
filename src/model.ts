@@ -39,16 +39,18 @@ export const pathTypes={standard:'Standard path',bridge:'Bridge / raised walkway
 export type PathType=keyof typeof pathTypes;
 export const bridgePresets={simple:'Simple deck',railed:'Bridge with railings'} as const;
 export type BridgeDesign=keyof typeof bridgePresets;
+export const bridgeEndpointModes={ramp:'Ramp to ground',steps:'Steps to ground',deadEnd:'Dead end'} as const;
+export type BridgeEndpointMode=keyof typeof bridgeEndpointModes;
 export const pathAccess={unknown:'Not specified',stepFree:'Step-free access',notStepFree:'Not step-free'} as const;
 export type PathAccess=keyof typeof pathAccess;
-export type SitePath = { generatedBy?: 'road-trace'; id: string; name: string; width: number; points: Coord[]; curves?: number[];segmentTypes?:PathType[];bridgeDesigns?:BridgeDesign[];heights?:number[];segmentAccess?:PathAccess[];pointAccess?:PathAccess[] };
+export type SitePath = { generatedBy?: 'road-trace'; id: string; name: string; width: number; points: Coord[]; curves?: number[];segmentTypes?:PathType[];bridgeDesigns?:BridgeDesign[];unrailedSegments?:boolean[];heights?:number[];segmentAccess?:PathAccess[];pointAccess?:PathAccess[] };
 export function pathSections(path:SitePath):{path:SitePath;type:PathType;start:number;end:number}[]{
   const sections:{path:SitePath;type:PathType;start:number;end:number}[]=[];
   const accessAt=(index:number):PathAccess=>path.segmentTypes?.[index]==='bridge'?(path.segmentAccess?.[index]??'unknown'):(path.pointAccess?.[index]==='notStepFree'&&path.pointAccess?.[index+1]==='notStepFree'?'notStepFree':'unknown');
   for(let start=0;start<path.points.length-1;){
     const type=path.segmentTypes?.[start]??'standard';let end=start+1;
     while(end<path.points.length-1&&(path.segmentTypes?.[end]??'standard')===type&&accessAt(end)===accessAt(start))end++;
-    sections.push({type,start,end,path:{...path,segmentTypes:undefined,segmentAccess:undefined,pointAccess:undefined,heights:path.heights?.slice(start,end+1),points:path.points.slice(start,end+1),curves:path.curves?.slice(start,end+1).map((amount,index)=>index===0||index===end-start?0:amount)}});
+    sections.push({type,start,end,path:{...path,segmentTypes:undefined,segmentAccess:undefined,pointAccess:undefined,heights:path.heights?.slice(start,end+1),unrailedSegments:path.unrailedSegments?.slice(start,end),points:path.points.slice(start,end+1),curves:path.curves?.slice(start,end+1).map((amount,index)=>index===0||index===end-start?0:amount)}});
     start=end;
   }
   return sections;
@@ -56,7 +58,7 @@ export function pathSections(path:SitePath):{path:SitePath;type:PathType;start:n
 export function pathVertexLevel(path:SitePath,index:number):number{
   if(index===0||index===path.points.length-1)return 0;
   const before=path.segmentTypes?.[index-1]??'standard',after=path.segmentTypes?.[index]??'standard';
-  return before!==after?0:before==='bridge'?1:before==='underpass'?-1:0;
+  return before==='bridge'&&after==='bridge'?1:0;
 }
 export function pathVertexKey(path:SitePath,index:number):string{
   if(path.heights?.some(height=>height>0))return `height:${path.heights[index].toFixed(3)}`;
@@ -73,23 +75,160 @@ export function setPathPointHeight(project:EventProject,id:string,index:number,h
   })};
 }
 export type SiteArea = { id: string; name: string; rings: Coord[][]; height: number };
-export type SiteBridge = { id:string; name:string; width:number; height:number; rampLength?:number; wheelchairAccessible?:boolean; sourcePoints?:Coord[]; points:Coord[]; heights:number[]; design:BridgeDesign };
-export function bridgePaths(bridges:SiteBridge[]=[]):SitePath[]{return bridges.map(bridge=>({id:bridge.id,name:bridge.name,width:bridge.width,points:bridge.points,heights:bridge.heights,segmentTypes:bridge.points.slice(1).map(()=>'bridge'),bridgeDesigns:bridge.points.slice(1).map(()=>bridge.design),segmentAccess:bridge.points.slice(1).map(()=>bridge.wheelchairAccessible?'stepFree':'notStepFree')}));}
+export type BridgeEndpoint={point:Coord;mode:BridgeEndpointMode;rampLength?:number};
+export type SiteBridge = { id:string; name:string; width:number; height:number; rampLength?:number; wheelchairAccessible?:boolean; sourcePoints?:Coord[]; endpoints?:BridgeEndpoint[]; points:Coord[]; heights:number[]; design:BridgeDesign };
+export function bridgeEndpoints(points:Coord[]):Coord[]{
+  const edges=new Set<string>(),degree=new Map<string,{point:Coord;count:number}>(),key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
+  for(let index=1;index<points.length;index++){const a=points[index-1],b=points[index],ak=key(a),bk=key(b);if(ak===bk)continue;const edge=[ak,bk].sort().join('|');if(edges.has(edge))continue;edges.add(edge);degree.set(ak,{point:a,count:(degree.get(ak)?.count??0)+1});degree.set(bk,{point:b,count:(degree.get(bk)?.count??0)+1});}
+  return [...degree.values()].filter(vertex=>vertex.count===1).map(vertex=>vertex.point);
+}
+export function bridgeJunctions(points:Coord[]):Coord[]{
+  const edges=new Set<string>(),degree=new Map<string,{point:Coord;neighbors:Set<string>}>(),key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
+  for(let index=1;index<points.length;index++){const a=points[index-1],b=points[index],ak=key(a),bk=key(b);if(ak===bk)continue;const edge=[ak,bk].sort().join('|');if(edges.has(edge))continue;edges.add(edge);const first=degree.get(ak)??{point:a,neighbors:new Set<string>()},last=degree.get(bk)??{point:b,neighbors:new Set<string>()};first.neighbors.add(bk);last.neighbors.add(ak);degree.set(ak,first);degree.set(bk,last);}
+  return [...degree.values()].filter(vertex=>vertex.neighbors.size>=3).map(vertex=>vertex.point);
+}
+export function bridgeHandlePoints(points:Coord[]):Coord[]{
+  const key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`,selected=new Map<string,Coord>();
+  const add=(point:Coord)=>selected.set(key(point),point);
+  for(const point of bridgeEndpoints(points))add(point);
+  for(const point of bridgeJunctions(points))add(point);
+  for(let index=1;index<points.length-1;index++){
+    const before=points[index-1],point=points[index],after=points[index+1],a=[point[0]-before[0],point[1]-before[1]],b=[after[0]-point[0],after[1]-point[1]],al=Math.hypot(...a),bl=Math.hypot(...b);
+    if(al<1e-12||bl<1e-12)continue;
+    const cosine=(a[0]*b[0]+a[1]*b[1])/(al*bl);
+    if(cosine<.985)add(point);
+  }
+  return [...selected.values()];
+}
+export function bridgePaths(bridges:SiteBridge[]=[]):SitePath[]{
+  const pointKey=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
+  const liesOnBridge=(point:Coord,points:Coord[])=>{
+    const cos=Math.cos(point[1]*Math.PI/180),metres=R*Math.PI/180;
+    for(let index=1;index<points.length;index++){
+      const first=points[index-1],last=points[index],dx=(last[0]-first[0])*metres*cos,dy=(last[1]-first[1])*metres,px=(point[0]-first[0])*metres*cos,py=(point[1]-first[1])*metres,length=dx*dx+dy*dy;
+      if(length<1e-12)continue;
+      const t=(px*dx+py*dy)/length,distance=Math.abs(px*dy-py*dx)/Math.sqrt(length);
+      if(t>=-1e-9&&t<=1+1e-9&&distance<=.02)return true;
+    }
+    return false;
+  };
+  const linked=bridges.map(()=>new Set<number>());
+  for(let index=0;index<bridges.length;index++)for(let otherIndex=index+1;otherIndex<bridges.length;otherIndex++){
+    const first=bridges[index].sourcePoints??bridges[index].points,second=bridges[otherIndex].sourcePoints??bridges[otherIndex].points;
+    if(bridgeEndpoints(first).some(point=>liesOnBridge(point,second))||bridgeEndpoints(second).some(point=>liesOnBridge(point,first))){linked[index].add(otherIndex);linked[otherIndex].add(index);}
+  }
+  const componentHeights=bridges.map((bridge,index)=>{
+    const component=new Set<number>([index]),pending=[index];
+    while(pending.length){const current=pending.pop()!;for(const other of linked[current])if(!component.has(other)){component.add(other);pending.push(other);}}
+    return Math.max(...[...component].map(member=>bridges[member].height));
+  });
+  const bridgeHeightAt=(point:Coord,index:number)=>{
+    const bridge=bridges[index],source=bridge.sourcePoints??bridge.points,profile=bridgeRampProfile(source,componentHeights[index],bridge.rampLength??bridgePathLength(source)*.1,bridge.endpoints),cos=Math.cos(point[1]*Math.PI/180),metres=R*Math.PI/180;
+    let closest=Infinity,height=0;
+    for(let segment=1;segment<profile.points.length;segment++){
+      const first=profile.points[segment-1],last=profile.points[segment],dx=(last[0]-first[0])*metres*cos,dy=(last[1]-first[1])*metres,px=(point[0]-first[0])*metres*cos,py=(point[1]-first[1])*metres,length=dx*dx+dy*dy;
+      if(length<1e-12)continue;
+      const t=Math.max(0,Math.min(1,(px*dx+py*dy)/length)),distance=Math.hypot(px-dx*t,py-dy*t);
+      if(distance<=.02&&distance<closest){closest=distance;height=profile.heights[segment-1]+(profile.heights[segment]-profile.heights[segment-1])*t;}
+    }
+    return closest<=.02?height:undefined;
+  };
+  return bridges.map((bridge,index)=>{
+    const sourcePoints=bridge.sourcePoints??bridge.points,connected=new Set(bridgeEndpoints(sourcePoints).filter(endpoint=>{
+      const hasEndpointOverride=(bridge.endpoints??[]).some(setting=>pointKey(setting.point)===pointKey(endpoint));
+      return !hasEndpointOverride&&[...linked[index]].some(otherIndex=>(bridgeHeightAt(endpoint,otherIndex)??0)>.02);
+    }).map(pointKey));
+    const endpointSettings=(bridge.endpoints??[]).filter(endpoint=>!connected.has(pointKey(endpoint.point)));
+    for(const point of bridgeEndpoints(sourcePoints))if(connected.has(pointKey(point)))endpointSettings.push({point,mode:'deadEnd'});
+    const height=componentHeights[index],profile=bridgeRampProfile(sourcePoints,height,bridge.rampLength??bridgePathLength(sourcePoints)*.1,endpointSettings);
+    return {id:bridge.id,name:bridge.name,width:bridge.width,points:profile.points,heights:profile.heights,unrailedSegments:profile.unrailedSegments,segmentTypes:profile.points.slice(1).map(()=>'bridge'),bridgeDesigns:profile.points.slice(1).map(()=>bridge.design),segmentAccess:profile.points.slice(1).map(()=>bridge.wheelchairAccessible?'stepFree':'notStepFree')};
+  });
+}
 export function bridgePathLength(points:Coord[]):number{
   if(points.length<2)return 0;
   const origin=points[0],cos=Math.cos(origin[1]*Math.PI/180),distance=(a:Coord,b:Coord)=>Math.hypot((b[0]-a[0])*R*Math.PI/180*cos,(b[1]-a[1])*R*Math.PI/180);
   return points.slice(1).reduce((sum,point,index)=>sum+distance(points[index],point),0);
 }
-export function bridgeRampProfile(sourcePoints:Coord[],height:number,rampLength:number):{points:Coord[];heights:number[]} {
-  if(sourcePoints.length<2)return {points:sourcePoints,heights:sourcePoints.map(()=>0)};
+export function bridgeRampProfile(sourcePoints:Coord[],height:number,rampLength:number,endpoints:BridgeEndpoint[]=[]):{points:Coord[];heights:number[];unrailedSegments:boolean[]} {
+  if(sourcePoints.length<2)return {points:sourcePoints,heights:sourcePoints.map(()=>0),unrailedSegments:[]};
+  height=Number.isFinite(height)?Math.max(.2,Math.min(20,height)):.2;
   const origin=sourcePoints[0],cos=Math.cos(origin[1]*Math.PI/180),distance=(a:Coord,b:Coord)=>Math.hypot((b[0]-a[0])*R*Math.PI/180*cos,(b[1]-a[1])*R*Math.PI/180);
-  const lengths=sourcePoints.slice(1).map((point,index)=>distance(sourcePoints[index],point)),total=lengths.reduce((sum,length)=>sum+length,0),rampDistance=Math.min(total*.45,Math.max(total*.02,rampLength));
+  const lengths=sourcePoints.slice(1).map((point,index)=>{const value=distance(sourcePoints[index],point);return Number.isFinite(value)?value:0;}),total=lengths.reduce((sum,length)=>sum+length,0),safeRampLength=Number.isFinite(rampLength)?Math.max(.1,rampLength):Math.max(.1,total*.1),rampDistance=Math.min(total*.5,safeRampLength);
   const cumulative:number[]=[0];lengths.forEach(length=>cumulative.push(cumulative.at(-1)!+length));
   const at=(target:number):Coord=>{let index=0;while(index<lengths.length-1&&cumulative[index+1]<target)index++;const segment=Math.max(.001,lengths[index]),fraction=Math.max(0,Math.min(1,(target-cumulative[index])/segment)),a=sourcePoints[index],b=sourcePoints[index+1];return [a[0]+(b[0]-a[0])*fraction,a[1]+(b[1]-a[1])*fraction];};
-  const samples=sourcePoints.length<199?[{point:sourcePoints[0],along:0},{point:at(rampDistance),along:rampDistance},...sourcePoints.slice(1,-1).map((point,index)=>({point,along:cumulative[index+1]})),{point:at(total-rampDistance),along:total-rampDistance},{point:sourcePoints.at(-1)!,along:total}]:sourcePoints.map((point,index)=>({point,along:cumulative[index]}));
+  const samples=[{point:sourcePoints[0],along:0},{point:at(rampDistance),along:rampDistance},...sourcePoints.slice(1,-1).map((point,index)=>({point,along:cumulative[index+1]})),{point:at(total-rampDistance),along:total-rampDistance},{point:sourcePoints.at(-1)!,along:total}];
+  const key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
+  const degree=new Map<string,number>(),edges=new Set<string>(),neighbors=new Map<string,Map<string,number>>();
+  for(let index=1;index<sourcePoints.length;index++){
+    const a=key(sourcePoints[index-1]),b=key(sourcePoints[index]);if(a===b)continue;
+    const edge=[a,b].sort().join('|');if(edges.has(edge))continue;edges.add(edge);
+    degree.set(a,(degree.get(a)??0)+1);degree.set(b,(degree.get(b)??0)+1);
+    if(!neighbors.has(a))neighbors.set(a,new Map());if(!neighbors.has(b))neighbors.set(b,new Map());
+    neighbors.get(a)!.set(b,lengths[index-1]);neighbors.get(b)!.set(a,lengths[index-1]);
+  }
+  // A branch is walked out and back in sourcePoints. Measure ramp distances on
+  // the physical graph so every occurrence of that branch has the same height.
+  const endpointAlong=bridgeEndpoints(sourcePoints).map(point=>{
+    const distances=new Map<string,number>([[key(point),0]]),pending=new Set([key(point)]);
+    while(pending.size){
+      const current=[...pending].reduce((first,last)=>distances.get(first)!<=distances.get(last)!?first:last);pending.delete(current);
+      for(const [other,length] of neighbors.get(current)??[]){const candidate=distances.get(current)!+length;if(candidate<(distances.get(other)??Infinity)){distances.set(other,candidate);pending.add(other);}}
+    }
+    const setting=endpoints.find(endpoint=>key(endpoint.point)===key(point)),requested=setting?.mode==='ramp'&&Number.isFinite(setting.rampLength)?Math.max(.1,setting.rampLength!):rampDistance;
+    const junctionDistance=Math.min(...[...degree].filter(([,count])=>count>=3).map(([node])=>distances.get(node)??Infinity));
+    const radius=Math.min(total*.5,requested,Math.max(.1,junctionDistance)),stepCount=Math.max(1,Math.ceil(Math.max(height,radius)/.3));
+    return {mode:setting?.mode??'ramp',distances,radius,stepCount};
+  });
+  const travelAt=(endpoint:typeof endpointAlong[number],along:number)=>{
+    let index=0;while(index<lengths.length-1&&cumulative[index+1]<along)index++;
+    return Math.min((endpoint.distances.get(key(sourcePoints[index]))??Infinity)+along-cumulative[index],(endpoint.distances.get(key(sourcePoints[index+1]))??Infinity)+cumulative[index+1]-along);
+  };
+  for(const endpoint of endpointAlong){
+    if(endpoint.mode==='deadEnd')continue;
+    const steps=endpoint.mode==='steps'?endpoint.stepCount:1;
+    for(let index=0;index<lengths.length;index++)for(let step=1;step<=steps;step++){
+      const travel=endpoint.radius*step/steps,fromFirst=travel-(endpoint.distances.get(key(sourcePoints[index]))??Infinity),fromLast=lengths[index]-travel+(endpoint.distances.get(key(sourcePoints[index+1]))??Infinity);
+      for(const offset of [fromFirst,fromLast]){
+        if(offset<=0||offset>=lengths[index])continue;
+        const along=cumulative[index]+offset;if(Math.abs(travelAt(endpoint,along)-travel)>.01)continue;
+        samples.push({point:at(along),along});
+      }
+    }
+  }
   samples.sort((a,b)=>a.along-b.along);
-  const unique=samples.filter((sample,index)=>index===0||sample.along-samples[index-1].along>.01);
-  return {points:unique.map(sample=>sample.point),heights:unique.map(({along})=>height*Math.max(0,Math.min(1,along/rampDistance,(total-along)/rampDistance)))};
+  const unique=samples.filter((sample,index)=>index===0||sample.along>samples[index-1].along);
+  const fullHeightPoints=new Set([...degree].filter(([,count])=>count>=3).map(([point])=>point));
+  for(const endpoint of endpoints)if(endpoint.mode==='deadEnd')fullHeightPoints.add(key(endpoint.point));
+  const profile=unique.map(({point,along})=>{
+    if(fullHeightPoints.has(key(point)))return height;
+    const rampFactor=(endpoint:typeof endpointAlong[number],travel:number)=>{
+      if(endpoint.mode==='deadEnd')return 1;
+      if(!Number.isFinite(travel)||!Number.isFinite(endpoint.radius)||endpoint.radius<=0)return travel>0?1:0;
+      if(endpoint.mode==='steps'){
+        const progress=Math.max(0,travel/endpoint.radius)*endpoint.stepCount,
+          nearestStep=Math.round(progress),
+          // Coordinates are stored as lon/lat, so a generated stair boundary
+          // can come back a few micrometres below its exact progress value.
+          // Snap only those near-integer values before flooring; otherwise a
+          // missed boundary makes one riser twice as tall as the rest.
+          stableProgress=Math.abs(progress-nearestStep)<1e-5?nearestStep:progress,
+          step=Math.min(endpoint.stepCount,Math.floor(stableProgress));
+        return step/endpoint.stepCount;
+      }
+      return Math.max(0,Math.min(1,travel/endpoint.radius));
+    };
+    let fraction=1;
+    for(const endpoint of endpointAlong){if(endpoint.mode==='deadEnd')continue;fraction=Math.min(fraction,rampFactor(endpoint,travelAt(endpoint,along)));}
+    const level=height*fraction;
+    return Number.isFinite(level)?Math.max(0,Math.min(height,level)):0;
+  });
+  const points:Coord[]=[],heights:number[]=[],slopePoints:boolean[]=[];
+  unique.forEach((sample,index)=>{
+    const level=profile[index]??0,prior=unique[index-1],previous=profile[index-1]??level,isStairs=endpointAlong.some(endpoint=>endpoint.mode==='steps'&&travelAt(endpoint,sample.along)<endpoint.radius-.001),isStairRiser=Boolean(index>0&&prior&&Math.abs(level-previous)>.001&&endpointAlong.some(endpoint=>endpoint.mode==='steps'&&travelAt(endpoint,sample.along)<=endpoint.radius+.01));
+    if(isStairRiser){points.push(sample.point);heights.push(previous);slopePoints.push(true);}
+    points.push(sample.point);heights.push(level);slopePoints.push(isStairs);
+  });
+  return {points,heights,unrailedSegments:slopePoints.slice(1).map((slope,index)=>slope||slopePoints[index])};
 }export type MapLayout = 'site' | 'route' | 'blank';
 export type SiteGround={width:number;depth:number;rotation:number;position?:Coord;outline?:Coord[];curves?:number[]};
 export type ReferenceLayer = { id:string;name:string;visible:boolean;opacity:number;points:{name:string;position:Coord}[];lines:{name:string;points:Coord[]}[];polygons:{name:string;rings:Coord[][]}[] };
@@ -234,9 +373,11 @@ export function pathProfile(path:SitePath):{position:Coord;height:number;segment
   return line.map(([x,y],index)=>({position:offset(origin,x,y),height:heights[index],segment:segments[index]}));
 }
 export function bridgeSpanPath(selectedPoints:Coord[]):{points:Coord[];heights:number[];rampLength:number;sourcePoints:Coord[]} {
-  const sourcePoints=selectedPoints,total=bridgePathLength(sourcePoints);
+  const sourcePoints=selectedPoints;
   if(sourcePoints.length<2)throw new Error('Select at least two points on the path.');
-  if(total<1)throw new Error('The selected span is too short to create a bridge.');
+  if(sourcePoints.some(point=>!point.every(Number.isFinite)))throw new Error('A bridge point has an invalid map position. Remove it and try again.');
+  const total=bridgePathLength(sourcePoints);
+  if(!Number.isFinite(total)||total<1)throw new Error('The selected span is too short to create a bridge.');
   const height=Math.max(.2,Math.min(3,total*.04)),rampLength=Math.round(total*.1*10)/10,profile=bridgeRampProfile(sourcePoints,height,rampLength);
   return {...profile,rampLength,sourcePoints};
 }export function insertPathVertex(path: SitePath,index: number,at: Coord,type?:PathType): SitePath {
@@ -263,12 +404,46 @@ export function removePathVertex(path: SitePath,index: number): SitePath {
 }
 /** Exactly coincident control points form editable geometric junctions. */
 export function moveConnectedPathVertex(project:EventProject,id:string,index:number,at:Coord):EventProject {
-  const sourcePath=project.paths.find(p=>p.id===id),source=sourcePath?.points[index];if(!source||!sourcePath)return project;
+  const sourcePath=project.paths.find(p=>p.id===id)??bridgePaths(project.bridges).find(p=>p.id===id),source=sourcePath?.points[index];if(!source||!sourcePath)return project;
   const level=pathVertexKey(sourcePath,index);
   return {...project,paths:project.paths.map(path=>{
     if(!path.points.some(p=>p[0]===source[0] && p[1]===source[1]))return path;
     return {...path,points:path.points.map((p,point)=>p[0]===source[0] && p[1]===source[1]&&pathVertexKey(path,point)===level?at:p)};
+  }),bridges:(project.bridges??[]).map(bridge=>{
+    const route=bridgePaths([bridge])[0],matches=route.points.some((point,i)=>point[0]===source[0]&&point[1]===source[1]&&pathVertexKey(route,i)===level);
+    if(!matches)return bridge;
+    const same=(point:Coord)=>point[0]===source[0]&&point[1]===source[1],sourcePoints=(bridge.sourcePoints??bridge.points).map(point=>same(point)?at:point),endpoints=bridge.endpoints?.map(endpoint=>({...endpoint,point:same(endpoint.point)?at:endpoint.point}));
+    return {...bridge,sourcePoints,endpoints,...bridgeRampProfile(sourcePoints,bridge.height,bridge.rampLength??bridgePathLength(sourcePoints)*.1,endpoints)};
   })};
+}
+export function connectMovedRouteVertex(project:EventProject,id:string,index:number,at:Coord,target?:{pathId:string;segment:number;at:Coord}):EventProject{
+  let state=project;
+  const targetPath=target&&state.paths.find(path=>path.id===target.pathId);
+  if(target&&targetPath&&!targetPath.points.some(point=>point[0]===at[0]&&point[1]===at[1])){
+    if(targetPath.points.length>=200)throw new Error('The target line has reached its point limit.');
+    const updated=insertPathVertex(targetPath,target.segment+1,at);state={...state,paths:state.paths.map(path=>path.id===updated.id?updated:path)};
+  }
+  state=moveConnectedPathVertex(state,id,index,at);
+  const sourceBridge=state.bridges?.find(bridge=>bridge.id===id),targetBridge=target&&state.bridges?.find(bridge=>bridge.id===target.pathId);
+  if(!sourceBridge||!targetBridge||sourceBridge.id===targetBridge.id)return state;
+  const targetPoints=[...(targetBridge.sourcePoints??targetBridge.points)],key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
+  if(!targetPoints.some(point=>key(point)===key(at))){
+    let nearest=0,best=Infinity;const cos=Math.cos(at[1]*Math.PI/180);
+    for(let i=1;i<targetPoints.length;i++){const a=targetPoints[i-1],b=targetPoints[i],dx=(b[0]-a[0])*cos,dy=b[1]-a[1],length=dx*dx+dy*dy,t=length?Math.max(0,Math.min(1,((at[0]-a[0])*cos*dx+(at[1]-a[1])*dy)/length)):0,distance=Math.hypot((a[0]-at[0])*cos+dx*t,a[1]-at[1]+dy*t);if(distance<best){best=distance;nearest=i;}}
+    targetPoints.splice(nearest,0,at);
+  }
+  // Walk the combined graph, retaining each arm without inventing connecting edges.
+  const vertices=new Map<string,Coord>(),neighbors=new Map<string,Set<string>>();
+  for(const points of [targetPoints,sourceBridge.sourcePoints??sourceBridge.points])for(let i=1;i<points.length;i++){
+    const a=key(points[i-1]),b=key(points[i]);vertices.set(a,points[i-1]);vertices.set(b,points[i]);if(a===b)continue;const aa=neighbors.get(a)??new Set<string>(),bb=neighbors.get(b)??new Set<string>();aa.add(b);bb.add(a);neighbors.set(a,aa);neighbors.set(b,bb);
+  }
+  const root=[...neighbors].find(([,adjacent])=>adjacent.size===1)?.[0]??key(targetPoints[0]),visited=new Set<string>(),sourcePoints:Coord[]=[vertices.get(root)!];
+  const walk=(node:string)=>{for(const other of neighbors.get(node)??[]){const edge=[node,other].sort().join('|');if(visited.has(edge))continue;visited.add(edge);sourcePoints.push(vertices.get(other)!);walk(other);sourcePoints.push(vertices.get(node)!);}};walk(root);
+  // End at the final leaf instead of returning to the first ramp a second time.
+  for(let i=sourcePoints.length-1;i>0;i--)if(key(sourcePoints[i])!==root&&neighbors.get(key(sourcePoints[i]))?.size===1){sourcePoints.splice(i+1);break;}
+  if(sourcePoints.length>200)throw new Error('The joined bridge would exceed its 200 point limit.');
+  const ends=new Set(bridgeEndpoints(sourcePoints).map(key)),endpoints=[...(targetBridge.endpoints??[]),...(sourceBridge.endpoints??[])].filter(endpoint=>ends.has(key(endpoint.point))),merged={...targetBridge,sourcePoints,endpoints,...bridgeRampProfile(sourcePoints,targetBridge.height,targetBridge.rampLength??bridgePathLength(sourcePoints)*.1,endpoints)};
+  return {...state,bridges:state.bridges!.filter(bridge=>bridge.id!==id).map(bridge=>bridge.id===merged.id?merged:bridge)};
 }
 export function pathFeatures(project: EventProject, selected: string | null,squareEnds=false): FeatureCollection<Polygon> {
   // Union metre-scale segments and round joins before converting back to GPS.
@@ -308,6 +483,10 @@ export function pathFeatures(project: EventProject, selected: string | null,squa
   return { type: 'FeatureCollection', features:features.sort((a,b)=>({underpass:-1,standard:0,bridge:1}[a.properties!.segmentType as PathType])-({underpass:-1,standard:0,bridge:1}[b.properties!.segmentType as PathType])) };
 }
 export function connectedPathIds(project: EventProject, selected: string | null): Set<string> {
+  const boundaryType=(path:SitePath):PathType|null=>{
+    const special=new Set((path.segmentTypes??[]).filter(type=>type==='bridge'||type==='underpass'));
+    return special.size===1?[...special][0]:null;
+  };
   const byPoint = new Map<string, string[]>();
   for (const path of project.paths) for (const [index,point] of path.points.entries()) {
     const key = JSON.stringify([point,pathVertexKey(path,index)]);
@@ -320,7 +499,8 @@ export function connectedPathIds(project: EventProject, selected: string | null)
     if (!path || linked.has(id)) continue;
     linked.add(id);
     for (const [index,point] of path.points.entries()) for (const other of byPoint.get(JSON.stringify([point,pathVertexKey(path,index)])) ?? []) {
-      if (!linked.has(other)) pending.push(other);
+      const neighbor=paths.get(other);
+      if (!linked.has(other)&&neighbor&&boundaryType(neighbor)===boundaryType(path)) pending.push(other);
     }
   }
   return linked;
@@ -429,7 +609,7 @@ export function parseProject(value: unknown): EventProject {
   });
   if(p.bridges!==undefined){
     if(!Array.isArray(p.bridges)||p.bridges.length>200)fail('Maximum 200 bridges per event.');
-    result.bridges=(p.bridges as unknown[]).map(v=>{const bridge=obj(v);if(!Array.isArray(bridge.points)||bridge.points.length<2||bridge.points.length>200)fail('Bridges need 2–200 points.');const points=(bridge.points as unknown[]).map(coord);if(!Array.isArray(bridge.heights)||bridge.heights.length!==points.length)fail('Bridge heights must match its points.');if(typeof bridge.design!=='string'||!Object.hasOwn(bridgePresets,bridge.design))fail('Unknown bridge design.');if(bridge.wheelchairAccessible!==undefined&&typeof bridge.wheelchairAccessible!=='boolean')fail('Bridge accessibility must be true or false.');const heights=(bridge.heights as unknown[]).map(height=>num(height,0,100));if(!heights.some(height=>height>0))fail('Bridges must rise above the ground.');return{id:text(bridge.id),name:text(bridge.name),width:num(bridge.width,.5,30),height:bridge.height===undefined?Math.max(...heights):num(bridge.height,.2,20),rampLength:bridge.rampLength===undefined ? Math.round(bridgePathLength(points)*.1*10)/10 : num(bridge.rampLength,.1,10000),wheelchairAccessible:bridge.wheelchairAccessible===true,...(Array.isArray(bridge.sourcePoints)?{sourcePoints:(bridge.sourcePoints as unknown[]).map(coord)}:{}),points,heights,design:bridge.design as BridgeDesign};});
+    result.bridges=(p.bridges as unknown[]).map(v=>{const bridge=obj(v);if(!Array.isArray(bridge.points)||bridge.points.length<2||bridge.points.length>200)fail('Bridges need 2–200 points.');const points=(bridge.points as unknown[]).map(coord);if(!Array.isArray(bridge.heights)||bridge.heights.length!==points.length)fail('Bridge heights must match its points.');if(typeof bridge.design!=='string'||!Object.hasOwn(bridgePresets,bridge.design))fail('Unknown bridge design.');if(bridge.wheelchairAccessible!==undefined&&typeof bridge.wheelchairAccessible!=='boolean')fail('Bridge accessibility must be true or false.');const heights=(bridge.heights as unknown[]).map(height=>num(height,0,100));if(!heights.some(height=>height>0))fail('Bridges must rise above the ground.');let endpoints:BridgeEndpoint[]|undefined;if(bridge.endpoints!==undefined){if(!Array.isArray(bridge.endpoints))fail('Bridge endpoints must be a list.');endpoints=(bridge.endpoints as unknown[]).map(value=>{const endpoint=obj(value);if(typeof endpoint.mode!=='string'||!Object.hasOwn(bridgeEndpointModes,endpoint.mode))fail('Unknown bridge endpoint type.');return{point:coord(endpoint.point),mode:endpoint.mode as BridgeEndpointMode,...(endpoint.rampLength===undefined?{}:{rampLength:num(endpoint.rampLength,.1,10000)})};});}return{id:text(bridge.id),name:text(bridge.name),width:num(bridge.width,.5,30),height:bridge.height===undefined?Math.max(...heights):num(bridge.height,.2,20),rampLength:bridge.rampLength===undefined ? Math.round(bridgePathLength(points)*.1*10)/10 : num(bridge.rampLength,.1,10000),wheelchairAccessible:bridge.wheelchairAccessible===true,...(Array.isArray(bridge.sourcePoints)?{sourcePoints:(bridge.sourcePoints as unknown[]).map(coord)}:{}),...(endpoints?{endpoints}:{}),points,heights,design:bridge.design as BridgeDesign};});
   }
   if(p.referenceLayers!==undefined){
     if(!Array.isArray(p.referenceLayers)||p.referenceLayers.length>5)fail('Maximum five reference layers per map.');

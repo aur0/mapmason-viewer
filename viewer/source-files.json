@@ -25,5 +25,6 @@
   "src/drawing.ts",
   "src/viewer-base.css",
   "src/map-labels.css",
-  "src/viewer.css"
+  "src/viewer.css",
+  "src/polyCutouts.ts"
 ]
