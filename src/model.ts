@@ -21,6 +21,7 @@ export const kinds = {
   waste: { name: 'Waste / recycling', color: '#acb983', width: 3, depth: 2, height: 1.2, icon: 'waste' },
   showers: { name: 'Shower block', color: '#92c9cf', width: 12, depth: 5, height: 2.8, icon: 'showers' },
   entrance: { name: 'Entrance', color: '#94b9a0', width: 12, depth: 3, height: 4, icon: 'door' },
+  reception: { name: 'Reception', color: '#c99a72', width: 14, depth: 10, height: 4, icon: 'building' },
   marker: { name: 'Place', color: '#b6c792', width: 3, depth: 3, height: .2, icon: 'pin' },
   custom: { name: 'Custom model', color: '#8c9fc7', width: 3, depth: 3, height: 3, icon: 'box' },
   scenery: { name: 'Scenery', color: '#63894e', width: 3, depth: 3, height: 3, icon: 'trees' },

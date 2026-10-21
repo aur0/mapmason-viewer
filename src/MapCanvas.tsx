@@ -391,7 +391,7 @@ export default function MapCanvas(props: Props) {
       ready = true; update(); props.actions.current?.fit();latest.current.onMapReady?.(map);
     });
     let labelFrame=0;
-    const priorities:Record<string,number>={medical:100,defib:95,start:85,finish:85,entrance:80,stage:75,information:70,camping:65,parking:65,toilets:55,water:50};
+    const priorities:Record<string,number>={medical:100,defib:95,start:85,finish:85,entrance:80,reception:78,stage:75,information:70,camping:65,parking:65,toilets:55,water:50};
     function layoutLabels(){
       labelFrame=0;if(!ready)return;
       const zoom=map.getZoom(),bounds=map.getContainer().getBoundingClientRect();

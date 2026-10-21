@@ -25,6 +25,7 @@ const definitions = {
   camping: [ReactIcons.Tent, SvgIcons.Tent],
   parking: [ReactIcons.SquareParking, SvgIcons.SquareParking],
   entrance: [ReactIcons.DoorOpen, SvgIcons.DoorOpen],
+  reception: [ReactIcons.Building2, SvgIcons.Building2],
   marker: [ReactIcons.MapPin, SvgIcons.MapPin],
   custom: [ReactIcons.Box, SvgIcons.Box],
   scenery: [ReactIcons.Trees, SvgIcons.Trees],
