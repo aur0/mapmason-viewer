@@ -435,10 +435,24 @@ export default function MapCanvas(props: Props) {
     map.on('move',scheduleLabels);map.on('resize',scheduleLabels);
     function update() {
       const p = latest.current; if (!ready) return;
+      const darkCanvas = (p.referenceStyle ?? 'light') === 'dark';
+      if (!p.reference) {
+        map.setPaintProperty('background', 'background-color', darkCanvas ? '#18231e' : '#b8c9bb');
+        map.setPaintProperty('ground', 'fill-color', darkCanvas ? '#29372e' : '#d9e3d3');
+        map.setPaintProperty('ground-edge', 'line-color', darkCanvas ? '#718579' : '#6b8f76');
+        map.setPaintProperty('grid', 'line-color', darkCanvas ? '#a9b8ad' : '#6a8a74');
+        map.setPaintProperty('grid', 'line-opacity', darkCanvas ? .16 : .2);
+        map.setPaintProperty('draft-area', 'fill-color', p.tool === 'ground' ? (darkCanvas ? '#29372e' : '#d9e3d3') : isAreaKind(p.tool) ? kinds[p.tool].color : '#91b886');
+      }
       const showTerrain = p.mode === '3d' && p.terrain !== false;
       if (showTerrain && !map.getSource('mapterhorn-terrain')) {
         map.addSource('mapterhorn-terrain', { type: 'raster-dem', url: 'https://tiles.mapterhorn.com/tilejson.json', tileSize: 512, encoding: 'terrarium' });
         map.addLayer({ id: 'terrain-shading', type: 'hillshade', source: 'mapterhorn-terrain', paint: { 'hillshade-shadow-color': '#526653', 'hillshade-highlight-color': '#f2f0df', 'hillshade-accent-color': '#75866c', 'hillshade-exaggeration': .28 } }, 'ground-edge');
+      }
+      if (map.getLayer('terrain-shading')) {
+        map.setPaintProperty('terrain-shading', 'hillshade-shadow-color', darkCanvas && !p.reference ? '#111a15' : '#526653');
+        map.setPaintProperty('terrain-shading', 'hillshade-highlight-color', darkCanvas && !p.reference ? '#46574b' : '#f2f0df');
+        map.setPaintProperty('terrain-shading', 'hillshade-accent-color', darkCanvas && !p.reference ? '#29382e' : '#75866c');
       }
       if (showTerrain !== terrainActive) {
         map.setTerrain(showTerrain ? { source: 'mapterhorn-terrain', exaggeration: 1 } : null);
@@ -462,7 +476,7 @@ export default function MapCanvas(props: Props) {
       for(const [layer,type] of [['bridge-edge','bridge'],['underpass-edge','underpass']])map.setFilter(layer,p.mode==='3d'?['all',['==',['get','segmentType'],type],['!=',['get','elevated'],true]]:['==',['get','segmentType'],type]);
       for(const layer of ['walking-route-outline','walking-route-line','walking-route-ends'])map.setLayoutProperty(layer,'visibility',p.mode==='3d'&&p.route?.heights?.some(height=>height>0)?'none':'visible');
       set('areas', { type: 'FeatureCollection', features: p.project.areas.map(a => ({ type: 'Feature', properties: { id: a.id, height: a.height, selected: p.boxSelectionActive?boxSelected.has(a.id):a.id===p.selected }, geometry: { type: 'Polygon', coordinates: a.rings } })) });
-      map.setPaintProperty('draft-area','fill-color',p.tool==='ground'?'#d9e3d3':isAreaKind(p.tool)?kinds[p.tool].color:'#91b886');
+      map.setPaintProperty('draft-area','fill-color',p.tool==='ground'?(darkCanvas&&!p.reference?'#29372e':'#d9e3d3'):isAreaKind(p.tool)?kinds[p.tool].color:'#91b886');
       set('target', { type: 'FeatureCollection', features: p.target ? [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p.target } }] : [] } as FeatureCollection<Point>);
       const referenceVisible=p.reference&&!(p.ground&&p.project.layout!=='route');
       const referenceStyle = p.referenceStyle ?? 'light';
