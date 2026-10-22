@@ -7,7 +7,7 @@ import {applyPolyCutouts} from './polyCutouts';
 export type PolyShape='cutout'|'box'|'cylinder'|'roof'|'cone'|'wedge'|'pyramid'|'arch'|'text'|'sphere'|'extrusion'|'surface'|'line'|'tube';
 export const polyRoofProfiles=['curved','flat','gabled','hipped','barrel','pyramid'] as const;
 export type PolyRoofProfile=typeof polyRoofProfiles[number];
-export type PolyPart={cutoutSurface?:number;cutoutTargets?:number[];surfaceColors?:Record<string,string>;shape:PolyShape;roofProfile?:PolyRoofProfile;endCaps?:boolean;openingWidth?:number;archRise?:number;crownThickness?:number;x:number;y:number;z:number;width:number;depth:number;height:number;rotation:number;color:string;frontColor?:string;topColor?:string;topRise?:number;topStep?:number;topStepAt?:number;tiltX?:number;tiltY?:number;topWidth?:number;topDepth?:number;rounding?:number;opacity?:number;emissive?:number;shadingStrength?:number;smoothShading?:boolean;group?:string;text?:string;outline?:[number,number][];path?:[number,number][];curve?:[number,number,number][];thickness?:number;radius?:number;endRadius?:number};
+export type PolyPart={brickTexture?:boolean;cutoutSurface?:number;cutoutTargets?:number[];surfaceColors?:Record<string,string>;shape:PolyShape;roofProfile?:PolyRoofProfile;endCaps?:boolean;openingWidth?:number;archRise?:number;crownThickness?:number;x:number;y:number;z:number;width:number;depth:number;height:number;rotation:number;color:string;frontColor?:string;topColor?:string;topRise?:number;topStep?:number;topStepAt?:number;tiltX?:number;tiltY?:number;topWidth?:number;topDepth?:number;rounding?:number;opacity?:number;emissive?:number;shadingStrength?:number;smoothShading?:boolean;group?:string;text?:string;outline?:[number,number][];path?:[number,number][];curve?:[number,number,number][];thickness?:number;radius?:number;endRadius?:number};
 export type PolyTransform={pitch:number;roll:number;yaw:number;elevation:number};
 export type PolyModel={format:'mapmason-poly';version:1;name:string;parts:PolyPart[];transform?:PolyTransform};
 type PolyPoint=[number,number];
@@ -65,6 +65,7 @@ export function parsePolyModel(input:unknown):PolyModel{
       if(rise>parsed.height)throw Error('Arch rise cannot exceed the total arch height.');
       if(parsed.crownThickness!==undefined&&parsed.crownThickness>rise-.01)throw Error('Arch crown thickness must be at least 0.01 metres smaller than the arch rise to leave an opening.');
     }
+    if(part.brickTexture!==undefined&&part.brickTexture!==null){if(parsed.shape!=='box'&&parsed.shape!=='extrusion'||parsed.shape==='box'&&part.rounding!==undefined&&part.rounding!==null||typeof part.brickTexture!=='boolean')throw Error('Brick texture needs a sharp-cornered box or extrusion and a boolean value.');parsed.brickTexture=part.brickTexture;}
     if(part.surfaceColors!==undefined&&part.surfaceColors!==null){
       if(typeof part.surfaceColors!=='object'||Array.isArray(part.surfaceColors)||Object.entries(part.surfaceColors).some(([key,value])=>!/^\d+$/.test(key)||typeof value!=='string'||!/^#[0-9a-f]{6}$/i.test(value)))throw Error('Surface colours must map surface indices to hex colours.');
       parsed.surfaceColors={...part.surfaceColors as Record<string,string>};
@@ -143,7 +144,7 @@ export const starterModel:PolyModel={format:'mapmason-poly',version:1,name:'Open
   {shape:'roof',x:0,y:0,z:7,width:20,depth:12,height:2.5,rotation:0,color:'#bcd891'},
   {shape:'box',x:0,y:3.9,z:1,width:12,depth:.4,height:5,rotation:0,color:'#273b36'}
 ]};
-export type PolyTriangle={cutoutIntersection?:boolean;cutout?:boolean;surfaceIndex?:number;partIndex?:number;positions:number[];color:number[];opacity:number;emissive?:number;vertexOpacity?:[number,number,number];vertexColors?:[number[],number[],number[]];group?:string;shadow?:boolean;text?:{value:string;aspect:number};uv?:number[]};
+export type PolyTriangle={cutoutIntersection?:boolean;cutout?:boolean;surfaceIndex?:number;partIndex?:number;positions:number[];color:number[];opacity:number;emissive?:number;vertexOpacity?:[number,number,number];vertexColors?:[number[],number[],number[]];group?:string;shadow?:boolean;text?:{value:string;aspect:number};brick?:boolean;uv?:number[]};
 /** Normalized height of a roof surface; omitted profile preserves existing roofs. */
 function roofHeight(part:PolyPart,u:number,v:number):number{
   const across=Math.max(0,1-Math.abs(u)),along=Math.max(0,1-Math.abs(v));
@@ -214,11 +215,11 @@ export function polyTriangles(model:PolyModel,withShadows=false,showCutouts=fals
     const angle=part.rotation*Math.PI/180,tiltX=(part.tiltX??0)*Math.PI/180,tiltY=(part.tiltY??0)*Math.PI/180,color=part.color.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255),frontColor=part.frontColor?.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255),opacity=part.shape==='cutout'?.08:part.opacity??1;
     const transform=(point:number[])=>{let [x,y,z]=point;const y1=y*Math.cos(tiltX)-z*Math.sin(tiltX),z1=y*Math.sin(tiltX)+z*Math.cos(tiltX),x1=x*Math.cos(tiltY)+z1*Math.sin(tiltY),z2=-x*Math.sin(tiltY)+z1*Math.cos(tiltY);return [part.x+x1*Math.cos(angle)+y1*Math.sin(angle),-part.y+x1*Math.sin(angle)-y1*Math.cos(angle),part.z+z2];};
     let surfaceCounter=0;
-    const add=(vertices:number[][],face:number[],_shade:number,faceColor=color,surfaceId?:number)=>{
+    const add=(vertices:number[][],face:number[],_shade:number,faceColor=color,surfaceId?:number,brickUV?:number[][])=>{
       const surfaceIndex=surfaceId??surfaceCounter++,override=part.surfaceColors?.[surfaceIndex];
       if(override)faceColor=override.slice(1).match(/../g)!.map(channel=>parseInt(channel,16)/255);
       for(let index=1;index<face.length-1;index++){
-        const triangle:PolyTriangle={cutout:part.shape==='cutout',partIndex,surfaceIndex,positions:[...transform(vertices[face[0]]),...transform(vertices[face[index]]),...transform(vertices[face[index+1]])],color:[...faceColor],opacity,emissive:part.emissive??0,group:part.group};
+        const faceIndices=[face[0],face[index],face[index+1]];const triangle:PolyTriangle={cutout:part.shape==='cutout',partIndex,surfaceIndex,positions:faceIndices.flatMap(vertex=>transform(vertices[vertex])),color:[...faceColor],opacity,emissive:part.emissive??0,group:part.group,...(brickUV?{brick:true,uv:faceIndices.flatMap(vertex=>brickUV[vertex])}:{})};
         const points=[face[0],face[index],face[index+1]].map(at=>vertices[at]),u=points[1].map((value,axis)=>value-points[0][axis]),v=points[2].map((value,axis)=>value-points[0][axis]);
         let normal=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
         if(['box','cutout','sphere','cylinder','cone','pyramid','wedge','text'].includes(part.shape)){
@@ -274,7 +275,7 @@ export function polyTriangles(model:PolyModel,withShadows=false,showCutouts=fals
     }else if(part.shape==='extrusion'){
       const outline=part.outline!,count=outline.length,vertices=[...outline.map(([x,y])=>[x*part.width/2,y*part.depth/2,0]),...outline.map(([x,y])=>[x*part.width/2,y*part.depth/2,height])];
       for(const triangle of triangulatePolygon(outline)){add(vertices,[triangle[0],triangle[2],triangle[1]],.6);add(vertices,triangle.map(index=>count+index),1);}
-      for(let index=0;index<count;index++){const next=(index+1)%count;add(vertices,[index,next,count+next,count+index],.72+.18*Math.cos(index*Math.PI*2/count));}
+      for(let index=0;index<count;index++){const next=(index+1)%count,brickUV=part.brickTexture?vertices.map(point=>[point[0],point[2]]):undefined;add(vertices,[index,next,count+next,count+index],.72+.18*Math.cos(index*Math.PI*2/count),color,undefined,brickUV);}
     }else if(part.shape==='sphere'){
       const vertices=sphereGeometry.vertices.map(([east,north,up])=>[east*part.width/2,north*part.depth/2,(up+1)*height/2]);
       for(const face of sphereGeometry.faces){
@@ -378,7 +379,7 @@ export function polyTriangles(model:PolyModel,withShadows=false,showCutouts=fals
       }
     }else{
       const base=[[-part.width/2,front,0],[part.width/2,front,0],[part.width/2,back,0],[-part.width/2,back,0]],top=[[-topW,-topD,height],[topW,-topD,height],[topW,topD,height],[-topW,topD,height]],vertices=[...base,...top];
-      for(const [face,shade]of [[[0,3,2,1],.6],[[4,5,6,7],1],[[0,1,5,4],.72],[[1,2,6,5],.85],[[2,3,7,6],.9],[[3,0,4,7],.78]] as [number[],number][])add(vertices,face,shade,face[0]===0&&face[1]===1?frontColor:undefined);
+      for(const [face,shade]of [[[0,3,2,1],.6],[[4,5,6,7],1],[[0,1,5,4],.72],[[1,2,6,5],.85],[[2,3,7,6],.9],[[3,0,4,7],.78]] as [number[],number][]){const isFrontBack=face[0]===0&&face[1]===1||face[0]===2&&face[1]===3;const brickUV=part.brickTexture&&isFrontBack?vertices.map(point=>[point[0],point[2]]):undefined;add(vertices,face,shade,face[0]===0&&face[1]===1?frontColor:undefined,undefined,brickUV);}
     }
     const partTriangles=triangles.slice(partStart);
     if(part.shape==='arch'||part.shape==='tube'||part.shape==='extrusion'){
@@ -404,10 +405,12 @@ export function polyTriangles(model:PolyModel,withShadows=false,showCutouts=fals
     triangle.color=entry.base.map(value=>value*brightness);
   }
   for(const part of smooth)smoothPartTriangles(part.triangles,part.materials);
-  // Omit horizontal ground-contact faces so openings reveal the actual ground.
+  // Omit solid shapes' horizontal ground-contact faces so openings reveal the actual ground.
+  // Flat design details such as lines and surfaces live at ground level and must remain visible.
   for(let index=triangles.length-1;index>=0;index--){
     const triangle=triangles[index];
-    if(!triangle.cutout&&[2,5,8].every(at=>Math.abs(triangle.positions[at])<.001))triangles.splice(index,1);
+    const part=triangle.partIndex===undefined?undefined:model.parts[triangle.partIndex];
+    if(!triangle.cutout&&part?.shape!=='line'&&part?.shape!=='surface'&&[2,5,8].every(at=>Math.abs(triangle.positions[at])<.001))triangles.splice(index,1);
   }
   if(model.parts.some(part=>part.shape==='cutout')){
     const clipped=applyPolyCutouts(triangles,model.parts,showCutouts);triangles.length=0;for(const triangle of clipped)triangles.push(triangle);

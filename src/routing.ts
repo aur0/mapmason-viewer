@@ -40,7 +40,8 @@ export function createPathNetwork(project: EventProject): PathNetwork {
       const pathSegment=section.start+Math.min(samples[i-1].segment,samples[i].segment);
       const access=path.segmentAccess?.[section.start];
       const isBridge=section.type==='bridge'||(legacyPath&&coveredBridgeSegments.has(`${path.id}:${pathSegment}`));
-      const wheelchairAccessible=(section.type!=='bridge'||access==='stepFree')&&!(legacyPath&&blockedBridgeSegments.has(`${path.id}:${pathSegment}`));
+      const restrictedPoint=path.pointAccess?.[pathSegment]==='notStepFree'||path.pointAccess?.[pathSegment+1]==='notStepFree';
+      const wheelchairAccessible=(section.type!=='bridge'||access==='stepFree')&&!restrictedPoint&&!(legacyPath&&blockedBridgeSegments.has(`${path.id}:${pathSegment}`));
       const physical=path.heights?.some(height=>height>0)??false;
       const startLevel=i===1?(underpassJunctions.has(coordinateKey(points[i-1]))?-1:0):level,endLevel=i===points.length-1?(underpassJunctions.has(coordinateKey(points[i]))?-1:0):level;
       const a=node(points[i-1],startLevel,samples[i-1].height,physical), b=node(points[i],endLevel,samples[i].height,physical), length=Math.hypot(distance(network.xy[a],network.xy[b]),samples[i].height-samples[i-1].height);
@@ -66,9 +67,9 @@ export function createPathNetwork(project: EventProject): PathNetwork {
   return network;
 }
 
-export function shortestRoute(network: PathNetwork, from: Coord, to: Coord, avoidReverse?: [Coord,Coord], stepFreeOnly=false, avoidBridges=false): WalkingRoute {
-  const routableSegments=network.segments.filter(segment=>(!stepFreeOnly||segment.wheelchairAccessible)&&(!avoidBridges||!segment.isBridge));
-  if (!routableSegments.length) throw new Error(avoidBridges?'No route is available without bridges.':stepFreeOnly?'No step-free route is available. Check the path and bridge access markings.':'This map has no paths to route along yet.');
+export function shortestRoute(network: PathNetwork, from: Coord, to: Coord, avoidReverse?: [Coord,Coord], wheelchairAccessibleOnly=false, avoidBridges=false): WalkingRoute {
+  const routableSegments=network.segments.filter(segment=>(!wheelchairAccessibleOnly||segment.wheelchairAccessible)&&(!avoidBridges||!segment.isBridge));
+  if (!routableSegments.length) throw new Error(avoidBridges?'No route is available without bridges.':wheelchairAccessibleOnly?'No wheelchair-accessible route is available. Check the path and bridge access markings.':'This map has no paths to route along yet.');
   const snap = (p: Coord) => {
     const xy=projectPoint(network,p); let best: {segment:Segment;index:number;t:number;gap:number;at:Coord}|undefined;
     routableSegments.forEach((segment,index) => {
@@ -109,8 +110,8 @@ export function shortestRoute(network: PathNetwork, from: Coord, to: Coord, avoi
     if(current.cost!==known?.cost||current.narrowness!==known.narrowness)continue;
     if(current.id===endId)break;
     for(const edge of [...(network.edges[current.id]??[]),...(extras.get(current.id)??[])]){
-      if(stepFreeOnly&&(network.inaccessiblePoints.has(current.id)||network.inaccessiblePoints.has(edge.to)))continue;
-      if((stepFreeOnly&&!edge.wheelchairAccessible)||(avoidBridges&&edge.isBridge))continue;
+      if(wheelchairAccessibleOnly&&(network.inaccessiblePoints.has(current.id)||network.inaccessiblePoints.has(edge.to)))continue;
+      if((wheelchairAccessibleOnly&&!edge.wheelchairAccessible)||(avoidBridges&&edge.isBridge))continue;
       if(reverseBlocked(current.id,edge.to))continue;
       const next={cost:current.cost+edge.length,narrowness:current.narrowness+edge.length/Math.max(.5,edge.width)};
       if(better(next,costs.get(edge.to)??{cost:Infinity,narrowness:Infinity})){
@@ -120,7 +121,7 @@ export function shortestRoute(network: PathNetwork, from: Coord, to: Coord, avoi
   }
   const total=costs.get(endId)?.cost;
   if(total===undefined){
-    if(stepFreeOnly)throw new Error('No step-free route connects these places. Please ask event staff for help finding an alternative.');
+    if(wheelchairAccessibleOnly)throw new Error('No wheelchair-accessible route connects these places. Please ask event staff for help finding an alternative.');
     if(avoidBridges)throw new Error('No route connects these places without bridges.');
     throw new Error('These paths are not connected. Join them in the designer before routing between these places.');
   }

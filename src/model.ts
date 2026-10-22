@@ -5,10 +5,17 @@ import {parsePolyModel,type PolyModel} from './polyModel';
 export type Coord = [number, number]; // longitude, latitude, WGS84
 export const kinds = {
   stage: { name: 'Stage', color: '#ef927e', width: 26, depth: 16, height: 7, icon: 'music' },
+  rollerCoaster: { name: 'Roller coaster', color: '#e9a85d', width: 70, depth: 24, height: 30, icon: 'roller-coaster' },
+  ferrisWheel: { name: 'Ferris wheel', color: '#d98257', width: 24, depth: 24, height: 35, icon: 'ferris-wheel' },
+  carousel: { name: 'Carousel', color: '#d6a4c8', width: 16, depth: 16, height: 10, icon: 'carousel' },
+  logFlume: { name: 'Log flume', color: '#5f9faf', width: 60, depth: 20, height: 15, icon: 'log-flume' },
+  bumperCars: { name: 'Bumper cars', color: '#87a8cf', width: 24, depth: 24, height: 8, icon: 'bumper-cars' },
   toilets: { name: 'Toilets', color: '#236985', width: 9, depth: 5, height: 2.6, icon: 'toilet' },
   food: { name: 'Food', color: '#e5ba6f', width: 10, depth: 6, height: 3, icon: 'utensils' },
   water: { name: 'Water', color: '#75b7c1', width: 3, depth: 3, height: 1.5, icon: 'droplet' },
   waterArea: { name: 'Water area', color: '#69afcf', width: 40, depth: 25, height: 0, icon: 'waves' },
+  habitat: { name: 'Animal habitat', color: '#8fae79', width: 80, depth: 60, height: 0, icon: 'paw-print' },
+  animalHouse: { name: 'Animal house', color: '#b78e68', width: 16, depth: 12, height: 4, icon: 'building' },
   tent: { name: 'Tent', color: '#b8abd5', width: 12, depth: 10, height: 4, icon: 'tent' },
   tree: { name: 'Tree', color: '#63894e', width: 7, depth: 7, height: 9, icon: 'tree' },
   medical: { name: 'Medical tent', color: '#b32235', width: 9, depth: 7, height: 3, icon: 'medical' },
@@ -21,11 +28,17 @@ export const kinds = {
   waste: { name: 'Waste / recycling', color: '#acb983', width: 3, depth: 2, height: 1.2, icon: 'waste' },
   showers: { name: 'Shower block', color: '#92c9cf', width: 12, depth: 5, height: 2.8, icon: 'showers' },
   entrance: { name: 'Entrance', color: '#94b9a0', width: 12, depth: 3, height: 4, icon: 'door' },
+  campusBuilding: { name: 'Building', color: '#c99a72', width: 24, depth: 18, height: 8, icon: 'building' },
+  library: { name: 'Library', color: '#8ca6c4', width: 26, depth: 18, height: 8, icon: 'book' },
+  sportsCentre: { name: 'Sports centre', color: '#79a69a', width: 36, depth: 26, height: 9, icon: 'basketball' },
+  trailhead: { name: 'Trailhead', color: '#83a978', width: 3, depth: 3, height: 1.8, icon: 'hiking' },
+  viewpoint: { name: 'Viewpoint', color: '#7ca6b4', width: 3, depth: 3, height: 1.8, icon: 'binoculars' },
+  visitorCentre: { name: 'Visitor centre', color: '#c69b70', width: 20, depth: 14, height: 5, icon: 'building' },
   reception: { name: 'Reception', color: '#c99a72', width: 14, depth: 10, height: 4, icon: 'building' },
   indoorPool: { name: 'Indoor pool', color: '#5c9db5', width: 24, depth: 14, height: 5, icon: 'building' },
   outdoorPool: { name: 'Outdoor pool', color: '#39a4c4', width: 26, depth: 14, height: .5, icon: 'waves' },
   marker: { name: 'Place', color: '#b6c792', width: 3, depth: 3, height: .2, icon: 'pin' },
-  custom: { name: 'Custom model', color: '#8c9fc7', width: 3, depth: 3, height: 3, icon: 'box' },
+  custom: { name: 'Custom object', color: '#8c9fc7', width: 3, depth: 3, height: 3, icon: 'box' },
   scenery: { name: 'Scenery', color: '#63894e', width: 3, depth: 3, height: 3, icon: 'trees' },
   start: { name: 'Start', color: '#9ed6a0', width: 6, depth: 2, height: .2, icon: 'flag' },
   finish: { name: 'Finish', color: '#e3c185', width: 6, depth: 2, height: .2, icon: 'flag' },
@@ -33,11 +46,55 @@ export const kinds = {
   checkpoint: { name: 'Checkpoint', color: '#9fcbd2', width: 3, depth: 3, height: .2, icon: 'flag' },
 } as const;
 export type Kind = keyof typeof kinds;
-export const areaKinds=['camping','parking','restricted','waterArea'] as const;
+export type MapObjectPreset='festival'|'holiday-park'|'theme-park'|'zoo'|'campus'|'park'|'national-park'|'town'|'route';
+export type ObjectRelevance=Record<MapObjectPreset,boolean>;
+export const objectRelevance:Record<Kind,ObjectRelevance>={
+  stage:{festival:true,'holiday-park':false,'theme-park':false,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  rollerCoaster:{festival:false,'holiday-park':false,'theme-park':true,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  ferrisWheel:{festival:false,'holiday-park':false,'theme-park':true,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  carousel:{festival:false,'holiday-park':false,'theme-park':true,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  logFlume:{festival:false,'holiday-park':false,'theme-park':true,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  bumperCars:{festival:false,'holiday-park':false,'theme-park':true,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  toilets:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  food:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  water:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  waterArea:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:false,campus:false,park:true,'national-park':true,town:true},
+  habitat:{festival:false,'holiday-park':false,'theme-park':false,zoo:true,route:false,campus:false,park:false,'national-park':false,town:false},
+  animalHouse:{festival:false,'holiday-park':false,'theme-park':false,zoo:true,route:false,campus:false,park:false,'national-park':false,town:false},
+  tent:{festival:true,'holiday-park':true,'theme-park':false,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  tree:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:false,campus:false,park:false,'national-park':false,town:true},
+  medical:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  defib:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  camping:{festival:true,'holiday-park':true,'theme-park':false,zoo:false,route:false,campus:false,park:false,'national-park':true,town:false},
+  parking:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  restricted:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:false,campus:true,park:true,'national-park':true,town:true},
+  barrier:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  information:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  waste:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:false,campus:true,park:true,'national-park':true,town:true},
+  showers:{festival:true,'holiday-park':true,'theme-park':false,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  entrance:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  campusBuilding:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:false,campus:true,park:false,'national-park':false,town:false},
+  library:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:false,campus:true,park:false,'national-park':false,town:true},
+  sportsCentre:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:false,campus:true,park:true,'national-park':false,town:true},
+  trailhead:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:false,campus:false,park:false,'national-park':true,town:false},
+  viewpoint:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:false,campus:false,park:false,'national-park':true,town:false},
+  visitorCentre:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:false,campus:false,park:false,'national-park':true,town:true},
+  reception:{festival:false,'holiday-park':true,'theme-park':true,zoo:true,route:false,campus:true,park:false,'national-park':false,town:false},
+  indoorPool:{festival:false,'holiday-park':true,'theme-park':true,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  outdoorPool:{festival:false,'holiday-park':true,'theme-park':true,zoo:false,route:false,campus:false,park:false,'national-park':false,town:false},
+  marker:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:true,campus:true,park:true,'national-park':true,town:true},
+  custom:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:false,campus:true,park:true,'national-park':true,town:true},
+  scenery:{festival:true,'holiday-park':true,'theme-park':true,zoo:true,route:false,campus:true,park:true,'national-park':true,town:true},
+  start:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:true,campus:false,park:false,'national-park':false,town:false},
+  finish:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:true,campus:false,park:false,'national-park':false,town:false},
+  shaping:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:true,campus:false,park:false,'national-park':false,town:false},
+  checkpoint:{festival:false,'holiday-park':false,'theme-park':false,zoo:false,route:true,campus:false,park:false,'national-park':false,town:false},
+};
+export const areaKinds=['camping','parking','restricted','waterArea','habitat'] as const;
 export type AreaKind=typeof areaKinds[number];
 export function isAreaKind(kind:string):kind is AreaKind{return areaKinds.some(area=>area===kind);}
 export function isBoundaryTool(tool:string):boolean{return tool==='ground'||isAreaKind(tool);}
-export type SiteObject = { id: string; kind: Kind; name: string; position: Coord; width: number; depth: number; height: number; rotation: number; treeStyle?:number; hasDefib?: boolean; outline?: Coord[];customModelId?:string;customModel?:PolyModel }; // outline: normalized local XY, not GPS
+export type SiteObject = { id: string; kind: Kind; name: string; position: Coord; width: number; depth: number; height: number; rotation: number; treeStyle?:number; hasDefib?: boolean; customIcon?:{id:string;pack:string;title?:string;svg:string;author?:string;authorUrl?:string;license?:string;licenseUrl?:string}; outline?: Coord[];customModelId?:string;customModel?:PolyModel }; // outline: normalized local XY, not GPS
 export const pathTypes={standard:'Standard path',bridge:'Bridge / raised walkway',underpass:'Underpass'} as const;
 export type PathType=keyof typeof pathTypes;
 export const bridgePresets={simple:'Simple deck',railed:'Bridge with railings'} as const;
@@ -46,7 +103,7 @@ export const bridgeEndpointModes={ramp:'Ramp to ground',steps:'Steps to ground',
 export type BridgeEndpointMode=keyof typeof bridgeEndpointModes;
 export const pathAccess={unknown:'Not specified',stepFree:'Step-free access',notStepFree:'Not step-free'} as const;
 export type PathAccess=keyof typeof pathAccess;
-export type SitePath = { generatedBy?: 'road-trace'; id: string; name: string; width: number; points: Coord[]; curves?: number[];segmentTypes?:PathType[];bridgeDesigns?:BridgeDesign[];unrailedSegments?:boolean[];heights?:number[];segmentAccess?:PathAccess[];pointAccess?:PathAccess[] };
+export type SitePath = { generatedBy?: 'road-trace'; id: string; name: string; width: number; points: Coord[]; curves?: number[];joinVertices?:{key:string;at:Coord}[];segmentTypes?:PathType[];bridgeDesigns?:BridgeDesign[];unrailedSegments?:boolean[];heights?:number[];segmentAccess?:PathAccess[];pointAccess?:PathAccess[];deckColor?:string;supportColor?:string;railingColor?:string };
 export function pathSections(path:SitePath):{path:SitePath;type:PathType;start:number;end:number}[]{
   const sections:{path:SitePath;type:PathType;start:number;end:number}[]=[];
   const accessAt=(index:number):PathAccess=>path.segmentTypes?.[index]==='bridge'?(path.segmentAccess?.[index]??'unknown'):(path.pointAccess?.[index]==='notStepFree'&&path.pointAccess?.[index+1]==='notStepFree'?'notStepFree':'unknown');
@@ -79,7 +136,11 @@ export function setPathPointHeight(project:EventProject,id:string,index:number,h
 }
 export type SiteArea = { id: string; name: string; rings: Coord[][]; height: number };
 export type BridgeEndpoint={point:Coord;mode:BridgeEndpointMode;rampLength?:number};
-export type SiteBridge = { id:string; name:string; width:number; height:number; rampLength?:number; wheelchairAccessible?:boolean; sourcePoints?:Coord[]; endpoints?:BridgeEndpoint[]; points:Coord[]; heights:number[]; design:BridgeDesign };
+export type SiteBridge = { id:string; name:string; width:number; height:number; rampLength?:number; wheelchairAccessible?:boolean; sourcePoints?:Coord[]; endpoints?:BridgeEndpoint[]; points:Coord[]; heights:number[]; design:BridgeDesign;deckColor?:string;supportColor?:string;railingColor?:string };
+export type WallStyle='stud'|'brick'|'timber'|'panel';
+export const wallStyles={stud:'Wall',brick:'Brick wall',timber:'Post and rail',panel:'Fence panels'} as const;
+export type SiteWall={id:string;name:string;points:Coord[];curves?:number[];joinVertices?:{key:string;at:Coord}[];style:WallStyle;color:string;postColor?:string;railColor?:string;height:number;thickness:number};
+export function wallPaths(walls:SiteWall[]=[]):SitePath[]{return walls.map(wall=>({id:wall.id,name:wall.name,width:wall.thickness,points:wall.points,...(wall.curves?{curves:wall.curves}:{})}));}
 export function bridgeEndpoints(points:Coord[]):Coord[]{
   const edges=new Set<string>(),degree=new Map<string,{point:Coord;count:number}>(),key=(point:Coord)=>`${point[0].toFixed(9)},${point[1].toFixed(9)}`;
   for(let index=1;index<points.length;index++){const a=points[index-1],b=points[index],ak=key(a),bk=key(b);if(ak===bk)continue;const edge=[ak,bk].sort().join('|');if(edges.has(edge))continue;edges.add(edge);degree.set(ak,{point:a,count:(degree.get(ak)?.count??0)+1});degree.set(bk,{point:b,count:(degree.get(bk)?.count??0)+1});}
@@ -144,7 +205,7 @@ export function bridgePaths(bridges:SiteBridge[]=[]):SitePath[]{
     const endpointSettings=(bridge.endpoints??[]).filter(endpoint=>!connected.has(pointKey(endpoint.point)));
     for(const point of bridgeEndpoints(sourcePoints))if(connected.has(pointKey(point)))endpointSettings.push({point,mode:'deadEnd'});
     const height=componentHeights[index],profile=bridgeRampProfile(sourcePoints,height,bridge.rampLength??bridgePathLength(sourcePoints)*.1,endpointSettings);
-    return {id:bridge.id,name:bridge.name,width:bridge.width,points:profile.points,heights:profile.heights,unrailedSegments:profile.unrailedSegments,segmentTypes:profile.points.slice(1).map(()=>'bridge'),bridgeDesigns:profile.points.slice(1).map(()=>bridge.design),segmentAccess:profile.points.slice(1).map(()=>bridge.wheelchairAccessible?'stepFree':'notStepFree')};
+    return {id:bridge.id,name:bridge.name,width:bridge.width,points:profile.points,heights:profile.heights,unrailedSegments:profile.unrailedSegments,segmentTypes:profile.points.slice(1).map(()=>'bridge'),bridgeDesigns:profile.points.slice(1).map(()=>bridge.design),segmentAccess:profile.points.slice(1).map(()=>bridge.wheelchairAccessible?'stepFree':'notStepFree'),deckColor:bridge.deckColor??'#deb873',supportColor:bridge.supportColor??'#deb873',railingColor:bridge.railingColor??'#deb873'};
   });
 }
 export function bridgePathLength(points:Coord[]):number{
@@ -233,11 +294,12 @@ export function bridgeRampProfile(sourcePoints:Coord[],height:number,rampLength:
   });
   return {points,heights,unrailedSegments:slopePoints.slice(1).map((slope,index)=>slope||slopePoints[index])};
 }export type MapLayout = 'site' | 'route' | 'blank';
-export type SiteGround={width:number;depth:number;rotation:number;position?:Coord;outline?:Coord[];curves?:number[]};
+export type MapPreset = MapObjectPreset | 'blank';
+export type SiteGround={width:number;depth:number;rotation:number;position?:Coord;outline?:Coord[];curves?:number[];boundary?:boolean};
 export type ReferenceLayer = { id:string;name:string;visible:boolean;opacity:number;points:{name:string;position:Coord}[];lines:{name:string;points:Coord[]}[];polygons:{name:string;rings:Coord[][]}[] };
-export type EventProject = { format: 'fieldwork-event'; version: 1; layout?: MapLayout; name: string; center: Coord; site: SiteGround; objects: SiteObject[]; paths: SitePath[]; areas: SiteArea[]; bridges?:SiteBridge[];referenceLayers?:ReferenceLayer[] };
-export function newMapProject(layout:MapLayout,name:string,center:Coord):EventProject {
-  return parseProject({format:'fieldwork-event',version:1,layout,name,center,site:{width:260,depth:220,rotation:0},objects:[],paths:[],areas:[],bridges:[]});
+export type EventProject = { format: 'fieldwork-event'; version: 1; layout?: MapLayout; preset?:MapPreset; name: string; center: Coord; site: SiteGround; objects: SiteObject[]; paths: SitePath[]; areas: SiteArea[]; bridges?:SiteBridge[];walls?:SiteWall[];referenceLayers?:ReferenceLayer[] };
+export function newMapProject(layout:MapLayout,name:string,center:Coord,preset?:MapPreset):EventProject {
+  return parseProject({format:'fieldwork-event',version:1,layout,...(preset?{preset}:{}),name,center,site:{width:260,depth:220,rotation:0},objects:[],paths:[],areas:[],bridges:[]});
 }
 const R = 6371000;
 export function offset(origin: Coord, east: number, north: number): Coord {
@@ -407,6 +469,7 @@ export function removePathVertex(path: SitePath,index: number): SitePath {
 }
 /** Exactly coincident control points form editable geometric junctions. */
 export function moveConnectedPathVertex(project:EventProject,id:string,index:number,at:Coord):EventProject {
+  const sourceWall=project.walls?.find(wall=>wall.id===id);if(sourceWall){if(index<0||index>=sourceWall.points.length)return project;const source=sourceWall.points[index],same=(point:Coord)=>point[0]===source[0]&&point[1]===source[1];return {...project,walls:(project.walls??[]).map(wall=>({...wall,points:wall.points.map((point,pointIndex)=>wall.id===id&&pointIndex===index||wall.id!==id&&same(point)?at:point),joinVertices:wall.joinVertices?.map(vertex=>same(vertex.at)?{...vertex,at}:vertex)}))};}
   const sourcePath=project.paths.find(p=>p.id===id)??bridgePaths(project.bridges).find(p=>p.id===id),source=sourcePath?.points[index];if(!source||!sourcePath)return project;
   const level=pathVertexKey(sourcePath,index);
   return {...project,paths:project.paths.map(path=>{
@@ -420,11 +483,19 @@ export function moveConnectedPathVertex(project:EventProject,id:string,index:num
   })};
 }
 export function connectMovedRouteVertex(project:EventProject,id:string,index:number,at:Coord,target?:{pathId:string;segment:number;at:Coord}):EventProject{
-  let state=project;
-  const targetPath=target&&state.paths.find(path=>path.id===target.pathId);
-  if(target&&targetPath&&!targetPath.points.some(point=>point[0]===at[0]&&point[1]===at[1])){
+  const joinKey=`${id}:${index}`;
+  let state:EventProject={...project,paths:project.paths.map(path=>{
+    const removed=(path.joinVertices??[]).filter(vertex=>vertex.key===joinKey);if(!removed.length)return path;
+    let next=path;
+    for(const vertex of removed){const pointIndex=next.points.findIndex(point=>Math.abs(point[0]-vertex.at[0])<1e-10&&Math.abs(point[1]-vertex.at[1])<1e-10);if(pointIndex>0&&pointIndex<next.points.length-1)next=removePathVertex(next,pointIndex);}
+    return {...next,joinVertices:(path.joinVertices??[]).filter(vertex=>vertex.key!==joinKey)};
+  })};
+  const targetPath=target&&target.pathId!==id&&state.paths.find(path=>path.id===target.pathId);
+  if(target&&targetPath){
     if(targetPath.points.length>=200)throw new Error('The target line has reached its point limit.');
-    const updated=insertPathVertex(targetPath,target.segment+1,at);state={...state,paths:state.paths.map(path=>path.id===updated.id?updated:path)};
+    if(!targetPath.points.some(point=>point[0]===at[0]&&point[1]===at[1])){
+      const updated=insertPathVertex(targetPath,target.segment+1,at);state={...state,paths:state.paths.map(path=>path.id===updated.id?{...updated,joinVertices:[...(updated.joinVertices??[]),{key:joinKey,at}]}:path)};
+    }
   }
   state=moveConnectedPathVertex(state,id,index,at);
   const sourceBridge=state.bridges?.find(bridge=>bridge.id===id),targetBridge=target&&state.bridges?.find(bridge=>bridge.id===target.pathId);
@@ -573,18 +644,20 @@ export function parseProject(value: unknown): EventProject {
   const obj = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : fail('Expected a project object.');
   const num = (v: unknown, min: number, max: number): number => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max ? v : fail(`Expected a number between ${min} and ${max}.`);
   const text = (v: unknown): string => typeof v === 'string' && v.trim().length > 0 && v.length <= 100 && !/[\x00-\x1f]/.test(v) ? v : fail('Names must contain 1–100 printable characters.');
+  const iconText = (v:unknown,max:number):string => typeof v==='string'&&v.length<=max&&!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(v)?v:fail('Invalid saved icon data.');
   const coord = (v: unknown): Coord => Array.isArray(v) && v.length === 2 ? [num(v[0], -180, 180), num(v[1], -80, 80)] : fail('Invalid GPS coordinates.');
+  const parseJoinVertices = (v:unknown):{key:string;at:Coord}[]|undefined => {if(v===undefined)return; if(!Array.isArray(v))return fail('Invalid generated join vertices.');return (v as unknown[]).map((value:unknown)=>{const vertex=obj(value);return{key:text(vertex.key),at:coord(vertex.at)};});};
   const p = obj(value);
   if (p.format !== 'fieldwork-event' || p.version !== 1) fail('Choose a MapMason event JSON file (version 1).');
   if (!Array.isArray(p.objects) || p.objects.length > 500 || !Array.isArray(p.paths) || p.paths.length > 200) fail('Maximum 500 objects and 200 paths per event.');
   const site = obj(p.site);
   const result: EventProject = { format: 'fieldwork-event', version: 1, name: text(p.name), center: coord(p.center), site: { width: num(site.width, site.outline!=null?.5:10, 2000), depth: num(site.depth, site.outline!=null?.5:10, 2000), rotation: num(site.rotation, -360, 360) },
     objects: (p.objects as unknown[]).map(v => { const o = obj(v); if (typeof o.kind !== 'string' || !Object.hasOwn(kinds, o.kind)) fail('Unknown object type.');
-      let outline:Coord[]|undefined;if(o.outline!=null){if(!isAreaKind(String(o.kind)) || !Array.isArray(o.outline))fail('Custom boundaries are supported for camping, parking, restricted and water areas.');outline=(o.outline as unknown[]).map(p=>{if(!Array.isArray(p) || p.length!==2)fail('Invalid area boundary point.');return [num((p as unknown[])[0],-.5,.5),num((p as unknown[])[1],-.5,.5)] as Coord;});validateOutline(outline);}
+      let outline:Coord[]|undefined;if(o.outline!=null){if(!isAreaKind(String(o.kind)) || !Array.isArray(o.outline))fail('Custom boundaries are supported for camping, parking, restricted, water and animal habitat areas.');outline=(o.outline as unknown[]).map(p=>{if(!Array.isArray(p) || p.length!==2)fail('Invalid area boundary point.');return [num((p as unknown[])[0],-.5,.5),num((p as unknown[])[1],-.5,.5)] as Coord;});validateOutline(outline);}
       if(o.hasDefib!==undefined && typeof o.hasDefib!=='boolean')fail('Defibrillator availability must be true or false.');
       if(o.hasDefib===true && o.kind!=='medical')fail('Defibrillator availability is only supported on first aid points.');
       if(o.treeStyle!==undefined&&(o.kind!=='tree'||typeof o.treeStyle!=='number'||!Number.isInteger(o.treeStyle)||o.treeStyle<1||o.treeStyle>5))fail('Tree style must be a whole number from 1 to 5 on a tree.');
-      const height=num(o.height,0,100),max=isAreaKind(String(o.kind))?2000:500,customModel=o.customModel==null?undefined:parsePolyModel(o.customModel),customModelId=o.customModelId==null?undefined:text(o.customModelId);if(customModelId&&!customModel)fail('Custom map models must include the model data.');return { id: text(o.id), name: text(o.name), kind: o.kind as Kind, position: coord(o.position), width: num(o.width, .5, max), depth: num(o.depth, .5, max), height: customModel?height:isAreaKind(String(o.kind))?0:height, rotation: num(o.rotation, -360, 360),...(outline?{outline}:{}),...(o.kind==='tree'&&o.treeStyle!==undefined?{treeStyle:o.treeStyle as number}:{}),...(o.kind==='medical' && o.hasDefib!==undefined?{hasDefib:o.hasDefib as boolean}:{}),...(customModel?{customModel,customModelId:customModelId??customModel.name}:{}) }; }),
+      const height=num(o.height,0,100),max=isAreaKind(String(o.kind))?2000:500,customModel=o.customModel==null?undefined:parsePolyModel(o.customModel),customModelId=o.customModelId==null?undefined:text(o.customModelId);if(customModelId&&!customModel)fail('Custom map models must include the model data.');let customIcon:SiteObject['customIcon'];if(o.customIcon!==undefined){const icon=obj(o.customIcon),id=text(icon.id),pack=text(icon.pack),svg=iconText(icon.svg,100_000),title=icon.title==null?undefined:text(icon.title);if(!/^[a-z0-9-]+:[a-z0-9-]+$/i.test(id)||id.split(':')[0]!==pack||svg.length>100_000)fail('Invalid custom object icon.');customIcon={id,pack,svg,...(title?{title}:{}),...(icon.author==null?{}:{author:text(icon.author)}),...(icon.authorUrl==null?{}:{authorUrl:iconText(icon.authorUrl,2048)}),...(icon.license==null?{}:{license:text(icon.license)}),...(icon.licenseUrl==null?{}:{licenseUrl:iconText(icon.licenseUrl,2048)})};}return { id: text(o.id), name: text(o.name), kind: o.kind as Kind, position: coord(o.position), width: num(o.width, customModel?.01:.5, max), depth: num(o.depth, customModel?.01:.5, max), height: customModel?height:isAreaKind(String(o.kind))?0:height, rotation: num(o.rotation, -360, 360),...(outline?{outline}:{}),...(o.kind==='tree'&&o.treeStyle!==undefined?{treeStyle:o.treeStyle as number}:{}),...(o.kind==='medical' && o.hasDefib!==undefined?{hasDefib:o.hasDefib as boolean}:{}),...(customIcon?{customIcon}:{}),...(customModel?{customModel,customModelId:customModelId??customModel.name}:{}) }; }),
     paths: (p.paths as unknown[]).map(v => { const path = obj(v); if (!Array.isArray(path.points) || path.points.length < 2 || path.points.length > 200) fail('Paths need 2–200 points.');
       const points=(path.points as unknown[]).map(coord);let curves: number[] | undefined;
       if(path.curves!==undefined){if(!Array.isArray(path.curves) || path.curves.length!==points.length)fail('Curve settings must match the path points.');curves=(path.curves as unknown[]).map(v=>num(v,0,1));if(curves[0]!==0 || curves.at(-1)!==0)fail('Only interior path points can be curved.');}
@@ -597,12 +670,15 @@ export function parseProject(value: unknown): EventProject {
       if(path.heights!==undefined){if(!Array.isArray(path.heights)||path.heights.length!==points.length)fail('Path heights must match its points.');heights=(path.heights as unknown[]).map(height=>num(height,0,100));if(JSON.stringify(points[0])===JSON.stringify(points.at(-1))&&heights[0]!==heights.at(-1))fail('A closed path must have matching start and end heights.');}
       if(path.segmentAccess!==undefined){if(!Array.isArray(path.segmentAccess)||path.segmentAccess.length!==points.length-1||path.segmentAccess.some(access=>typeof access!=='string'||!Object.hasOwn(pathAccess,access)))fail('Path accessibility must match its sections.');segmentAccess=path.segmentAccess as PathAccess[];}
       if(path.pointAccess!==undefined){if(!Array.isArray(path.pointAccess)||path.pointAccess.length!==points.length||path.pointAccess.some(access=>typeof access!=='string'||!Object.hasOwn(pathAccess,access)))fail('Path point accessibility must match its points.');pointAccess=path.pointAccess as PathAccess[];}
-      return { ...(path.generatedBy==='road-trace'?{generatedBy:'road-trace' as const}:{}), id: text(path.id), name: text(path.name), width: num(path.width, .5, 30), points,...(heights?{heights}:{}),...(segmentAccess?{segmentAccess}:{}),...(pointAccess?{pointAccess}:{}),...(segmentTypes?{segmentTypes}:{}),...(bridgeDesigns?{bridgeDesigns}:{}),...(curves?{curves}:{}) }; }),
-    areas: [], bridges: [] };
+      const generatedJoinVertices=parseJoinVertices(path.joinVertices);
+      return { ...(path.generatedBy==='road-trace'?{generatedBy:'road-trace' as const}:{}), id: text(path.id), name: text(path.name), width: num(path.width, .5, 30), points,...(heights?{heights}:{}),...(segmentAccess?{segmentAccess}:{}),...(pointAccess?{pointAccess}:{}),...(segmentTypes?{segmentTypes}:{}),...(bridgeDesigns?{bridgeDesigns}:{}),...(curves?{curves}:{}),...(generatedJoinVertices?{joinVertices:generatedJoinVertices}:{}) }; }),
+    areas: [], bridges: [], walls: [] };
   if(site.position!=null)result.site.position=coord(site.position);
   if(site.outline!=null){if(!Array.isArray(site.outline))fail('Invalid ground boundary.');const outline=(site.outline as unknown[]).map(p=>{if(!Array.isArray(p)||p.length!==2)fail('Invalid ground boundary point.');return [num((p as unknown[])[0],-.5,.5),num((p as unknown[])[1],-.5,.5)] as Coord;});validateOutline(outline);result.site.outline=outline;}
+  if(site.boundary!=null){if(typeof site.boundary!=='boolean')fail('Invalid ground boundary setting.');result.site.boundary=site.boundary as boolean;}
   if(site.curves!=null){if(!Array.isArray(site.curves)||site.curves.length!==(result.site.outline?.length??4))fail('Ground curve settings must match the boundary points.');result.site.curves=(site.curves as unknown[]).map(n=>num(n,0,1));}
   if(p.layout!==undefined){if(typeof p.layout!=='string' || !['site','route','blank'].includes(p.layout))fail('Unknown map layout.');result.layout=p.layout as MapLayout;}
+  if(p.preset!==undefined){if(typeof p.preset!=='string'||!['festival','holiday-park','theme-park','zoo','campus','park','national-park','town','route','blank'].includes(p.preset))fail('Unknown map starting preset.');result.preset=p.preset as MapPreset;}
   if (p.areas !== undefined && (!Array.isArray(p.areas) || p.areas.length > 200)) fail('Maximum 200 imported areas.');
   result.areas = ((p.areas ?? []) as unknown[]).map(v => {
     const a = obj(v); if (!Array.isArray(a.rings) || !a.rings.length || a.rings.length > 50) fail('An area needs an outer ring and optional holes.');
@@ -612,7 +688,11 @@ export function parseProject(value: unknown): EventProject {
   });
   if(p.bridges!==undefined){
     if(!Array.isArray(p.bridges)||p.bridges.length>200)fail('Maximum 200 bridges per event.');
-    result.bridges=(p.bridges as unknown[]).map(v=>{const bridge=obj(v);if(!Array.isArray(bridge.points)||bridge.points.length<2||bridge.points.length>200)fail('Bridges need 2–200 points.');const points=(bridge.points as unknown[]).map(coord);if(!Array.isArray(bridge.heights)||bridge.heights.length!==points.length)fail('Bridge heights must match its points.');if(typeof bridge.design!=='string'||!Object.hasOwn(bridgePresets,bridge.design))fail('Unknown bridge design.');if(bridge.wheelchairAccessible!==undefined&&typeof bridge.wheelchairAccessible!=='boolean')fail('Bridge accessibility must be true or false.');const heights=(bridge.heights as unknown[]).map(height=>num(height,0,100));if(!heights.some(height=>height>0))fail('Bridges must rise above the ground.');let endpoints:BridgeEndpoint[]|undefined;if(bridge.endpoints!==undefined){if(!Array.isArray(bridge.endpoints))fail('Bridge endpoints must be a list.');endpoints=(bridge.endpoints as unknown[]).map(value=>{const endpoint=obj(value);if(typeof endpoint.mode!=='string'||!Object.hasOwn(bridgeEndpointModes,endpoint.mode))fail('Unknown bridge endpoint type.');return{point:coord(endpoint.point),mode:endpoint.mode as BridgeEndpointMode,...(endpoint.rampLength===undefined?{}:{rampLength:num(endpoint.rampLength,.1,10000)})};});}return{id:text(bridge.id),name:text(bridge.name),width:num(bridge.width,.5,30),height:bridge.height===undefined?Math.max(...heights):num(bridge.height,.2,20),rampLength:bridge.rampLength===undefined ? Math.round(bridgePathLength(points)*.1*10)/10 : num(bridge.rampLength,.1,10000),wheelchairAccessible:bridge.wheelchairAccessible===true,...(Array.isArray(bridge.sourcePoints)?{sourcePoints:(bridge.sourcePoints as unknown[]).map(coord)}:{}),...(endpoints?{endpoints}:{}),points,heights,design:bridge.design as BridgeDesign};});
+    result.bridges=(p.bridges as unknown[]).map(v=>{const bridge=obj(v);if(!Array.isArray(bridge.points)||bridge.points.length<2||bridge.points.length>200)fail('Bridges need 2–200 points.');const points=(bridge.points as unknown[]).map(coord);if(!Array.isArray(bridge.heights)||bridge.heights.length!==points.length)fail('Bridge heights must match its points.');if(typeof bridge.design!=='string'||!Object.hasOwn(bridgePresets,bridge.design))fail('Unknown bridge design.');if(bridge.wheelchairAccessible!==undefined&&typeof bridge.wheelchairAccessible!=='boolean')fail('Bridge accessibility must be true or false.');const heights=(bridge.heights as unknown[]).map(height=>num(height,0,100));if(!heights.some(height=>height>0))fail('Bridges must rise above the ground.');let endpoints:BridgeEndpoint[]|undefined;if(bridge.endpoints!==undefined){if(!Array.isArray(bridge.endpoints))fail('Bridge endpoints must be a list.');endpoints=(bridge.endpoints as unknown[]).map(value=>{const endpoint=obj(value);if(typeof endpoint.mode!=='string'||!Object.hasOwn(bridgeEndpointModes,endpoint.mode))fail('Unknown bridge endpoint type.');return{point:coord(endpoint.point),mode:endpoint.mode as BridgeEndpointMode,...(endpoint.rampLength===undefined?{}:{rampLength:num(endpoint.rampLength,.1,10000)})};});}return{id:text(bridge.id),name:text(bridge.name),width:num(bridge.width,.5,30),height:bridge.height===undefined?Math.max(...heights):num(bridge.height,.2,20),rampLength:bridge.rampLength===undefined ? Math.round(bridgePathLength(points)*.1*10)/10 : num(bridge.rampLength,.1,10000),wheelchairAccessible:bridge.wheelchairAccessible!==false,...(Array.isArray(bridge.sourcePoints)?{sourcePoints:(bridge.sourcePoints as unknown[]).map(coord)}:{}),...(endpoints?{endpoints}:{}),points,heights,design:bridge.design as BridgeDesign,...(["deckColor","supportColor","railingColor"] as const).map(key=>[key,bridge[key]===undefined?"#deb873":bridge[key]] as const).reduce((colors,[key,color])=>{if(typeof color!=="string"||!/^#[0-9a-fA-F]{6}$/.test(color))fail(`Bridge ${key} must be a six-digit hex colour.`);return {...colors,[key]:color};},{})};});
+  }
+  if(p.walls!==undefined){
+    if(!Array.isArray(p.walls)||p.walls.length>200)fail('Maximum 200 walls per event.');
+    result.walls=(p.walls as unknown[]).map(value=>{const wall=obj(value);if(!Array.isArray(wall.points)||wall.points.length<2||wall.points.length>200)fail('Walls need 2–200 points.');if(typeof wall.style!=='string'||!Object.hasOwn(wallStyles,wall.style))fail('Unknown wall style.');const points=(wall.points as unknown[]).map(coord);let curves:number[]|undefined;if(wall.curves!==undefined){if(!Array.isArray(wall.curves)||wall.curves.length!==points.length)fail('Wall curve settings must match the wall points.');curves=(wall.curves as unknown[]).map(amount=>num(amount,0,1));if(curves[0]!==0||curves.at(-1)!==0)fail('Only interior wall points can be curved.');}const generatedJoinVertices=parseJoinVertices(wall.joinVertices);const color=wall.color===undefined?'#c7c1ad':wall.color as string;if(typeof color!=='string'||!/^#[0-9a-fA-F]{6}$/.test(color))fail('Wall colour must be a six-digit hex colour.');const extraColor=(key:"postColor"|"railColor",fallback:string)=>{const value=wall[key]??fallback;if(typeof value!=="string"||!/^#[0-9a-fA-F]{6}$/.test(value))fail(`Wall ${key} must be a six-digit hex colour.`);return value as string;};const style=wall.style as WallStyle,storedName=text(wall.name),name=style==='stud'&&storedName==='Stud wall'?wallStyles.stud:style==='timber'&&storedName==='Timber fence'?wallStyles.timber:storedName;return{id:text(wall.id),name,points,...(curves?{curves}:{}),...(generatedJoinVertices?{joinVertices:generatedJoinVertices}:{}),style,color,...(style==="timber"?{postColor:extraColor("postColor","#765437"),railColor:extraColor("railColor","#a47750")}:{ }),height:num(wall.height,0.1,100),thickness:num(wall.thickness,0.03,2)};});
   }
   if(p.referenceLayers!==undefined){
     if(!Array.isArray(p.referenceLayers)||p.referenceLayers.length>5)fail('Maximum five reference layers per map.');
@@ -627,10 +707,10 @@ export function parseProject(value: unknown): EventProject {
         polygons:list(layer.polygons).map(v=>{const polygon=obj(v);const rings=list(polygon.rings).map(v=>{const ring=list(v).map(referenceCoord);if(ring.length<4||ring[0][0]!==ring.at(-1)![0]||ring[0][1]!==ring.at(-1)![1])fail('Reference polygons need closed rings.');return ring;});if(!rings.length)fail('Reference polygons need an outer ring.');return {name:text(polygon.name),rings};})};
     });
   }
-  const ids = [...result.objects, ...result.paths, ...result.areas,...(result.bridges??[]),...(result.referenceLayers??[])].map(o => o.id); if (new Set(ids).size !== ids.length) fail('Object, area, path, bridge and reference IDs must be unique.');
+  const ids = [...result.objects, ...result.paths, ...result.areas,...(result.bridges??[]),...(result.walls??[]),...(result.referenceLayers??[])].map(o => o.id); if (new Set(ids).size !== ids.length) fail('Object, area, path, bridge, wall and reference IDs must be unique.');
   return result;
 }
 export function relocate(project: EventProject, center: Coord): EventProject {
   const move = (c: Coord): Coord => offset(center, (c[0] - project.center[0]) * Math.PI / 180 * R * Math.cos(project.center[1] * Math.PI / 180), (c[1] - project.center[1]) * Math.PI / 180 * R);
-  return { ...project, center, site:{...project.site,...(project.site.position?{position:move(project.site.position)}:{})}, objects: project.objects.map(o => ({ ...o, position: move(o.position) })), paths: project.paths.map(p => ({ ...p, points: p.points.map(move) })), bridges:(project.bridges??[]).map(b=>({...b,points:b.points.map(move)})), areas: project.areas.map(a => ({ ...a, rings: a.rings.map(ring => ring.map(move)) })) };
+  return { ...project, center, site:{...project.site,...(project.site.position?{position:move(project.site.position)}:{})}, objects: project.objects.map(o => ({ ...o, position: move(o.position) })), paths: project.paths.map(p => ({ ...p, points: p.points.map(move) })), bridges:(project.bridges??[]).map(b=>({...b,points:b.points.map(move)})), walls:(project.walls??[]).map(w=>({...w,points:w.points.map(move)})), areas: project.areas.map(a => ({ ...a, rings: a.rings.map(ring => ring.map(move)) })) };
 }

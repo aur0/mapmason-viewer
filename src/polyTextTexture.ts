@@ -6,14 +6,14 @@ export const polyVertexShader=`#version 300 es
 in vec3 a_position;in vec3 a_color;in float a_opacity;in float a_emissive;
 in vec2 a_uv;in float a_text;uniform mat4 u_matrix;
 out vec3 v_color;out float v_opacity;out float v_emissive;out vec2 v_uv;out float v_text;
-void main(){v_color=a_color;v_opacity=a_opacity;v_emissive=a_emissive;v_uv=a_uv;v_text=a_text;gl_Position=u_matrix*vec4(a_position,1.0);}`;
+void main(){v_color=a_color;v_opacity=a_opacity;v_emissive=a_emissive;v_uv=a_uv;v_text=a_text;gl_Position=u_matrix*vec4(a_position,1.0);if(a_text>2.5)gl_Position.z-=0.00005*gl_Position.w;}`;
 export const polyFragmentShader=`#version 300 es
 precision highp float;
 in vec3 v_color;in float v_opacity;in float v_emissive;in vec2 v_uv;in float v_text;
 uniform sampler2D u_text;out vec4 color;
-void main(){vec3 surface=v_color;if(v_text>0.5){float ink=dot(v_color,vec3(0.2126,0.7152,0.0722))>0.4?0.04:1.0;surface=mix(surface,vec3(ink),texture(u_text,v_uv).a);}color=vec4(surface*(1.0+2.2*v_emissive),v_opacity);}`;
+void main(){vec3 surface=v_color;if(v_text>2.5){}else if(v_text>1.5){float row=floor(v_uv.y/0.086);float x=v_uv.x/0.276+mod(row,2.0)*0.5;float y=v_uv.y/0.086;vec2 cell=fract(vec2(x,y));vec2 edge=min(cell,1.0-cell);float aa=max(fwidth(x),fwidth(y))*0.5;float mortar=max(1.0-smoothstep(0.035-aa,0.065+aa,edge.x),1.0-smoothstep(0.055-aa,0.085+aa,edge.y));float variation=0.94+0.06*sin(floor(x)*19.1+row*13.7);vec3 brick=mix(v_color*variation,vec3(0.72,0.68,0.61),mortar);float detail=1.0-smoothstep(0.45,1.4,max(fwidth(x),fwidth(y)));surface=mix(v_color*0.92,brick,detail);}else if(v_text>0.5){float ink=dot(v_color,vec3(0.2126,0.7152,0.0722))>0.4?0.04:1.0;surface=mix(surface,vec3(ink),texture(u_text,v_uv).a);}color=vec4(surface*(1.0+2.2*v_emissive),v_opacity);}`;
 
-type TexturedTriangle=Pick<PolyTriangle,'text'|'uv'>;
+type TexturedTriangle=Pick<PolyTriangle,'text'|'brick'|'uv'>;
 const textKey=(text:NonNullable<PolyTriangle['text']>)=>JSON.stringify([text.value,text.aspect]);
 
 export class PolyTextTexture{
@@ -76,6 +76,7 @@ export class PolyTextTexture{
   }
 
   vertex(triangle:TexturedTriangle,vertex:number):[number,number,number]{
+    if(triangle.brick&&triangle.uv)return [triangle.uv[vertex*2],triangle.uv[vertex*2+1],2];
     if(!triangle.text||!triangle.uv)return [0,0,0];
     const slot=this.slots.get(textKey(triangle.text));if(slot===undefined)return [0,0,0];
     const u=triangle.uv[vertex*2],v=triangle.uv[vertex*2+1];

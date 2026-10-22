@@ -14,7 +14,8 @@ if((await stat(input)).isDirectory()){
   const html=await readFile(input,'utf8');
   const scripts=[...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)].filter(match=>!match[1].includes('application/json'));
   if(scripts.length!==1||!scripts[0][1].includes('type="module"')||/\bsrc\s*=/.test(scripts[0][1]))throw Error('Expected exactly one bundled inline module script.');
-  const styles=[...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)];
+  // Do not treat a literal closing-style sequence inside bundled JavaScript as a real style tag.
+  const styles=[...html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)];
   const digests=[hash(scripts[0][2]),...styles.map(match=>hash(match[1]))];
   const expectedDigests=await Promise.all(Object.keys(expected.assets).map(async file=>{
     const code=await readFile(resolve('public/website-template',file),'utf8');

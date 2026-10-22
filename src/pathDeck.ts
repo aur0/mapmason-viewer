@@ -123,8 +123,10 @@ export function pathDeckTriangles(project:EventProject,selected:string|null):Dec
         const radius=Math.min(path.width*2,path.width/2/Math.max(.25,normal[0]*last[0]+normal[1]*last[1]));
         return {left:[sample.position[0]+normal[0]*radius,sample.position[1]+normal[1]*radius,sample.position[2]],right:[sample.position[0]-normal[0]*radius,sample.position[1]-normal[1]*radius,sample.position[2]]};
       });
-      const color=selected===path.id?[.78,.9,.67]:section.type==='bridge'?[.87,.72,.45]:section.type==='underpass'?[.58,.68,.73]:[.95,.93,.86];
-      const add=(first:number[],second:number[],third:number[],shade:number,index:number)=>triangles.push({positions:[...first,...second,...third],color:color.map(channel=>channel*shade),id:path.id,section:index});
+      const selectedColor=selected===path.id?[.78,.9,.67]:undefined,baseColor=section.type==='bridge'?[.87,.72,.45]:section.type==='underpass'?[.58,.68,.73]:[.95,.93,.86];
+      const rgb=(hex:string|undefined,fallback:number[])=>hex&&/^#[0-9a-fA-F]{6}$/.test(hex)?[parseInt(hex.slice(1,3),16)/255,parseInt(hex.slice(3,5),16)/255,parseInt(hex.slice(5,7),16)/255]:fallback;
+      const deckColor=rgb(path.deckColor,baseColor),supportColor=rgb(path.supportColor,baseColor),railingColor=rgb(path.railingColor,baseColor);
+      const add=(first:number[],second:number[],third:number[],shade:number,index:number,material=section.type==='bridge'?deckColor:baseColor)=>triangles.push({positions:[...first,...second,...third],color:(selectedColor??material).map(channel=>channel*shade),id:path.id,section:index});
       const bottom=(point:number[])=>[point[0],point[1],Math.max(0,point[2]-.18)];
       if(section.type==='bridge'){
         const arms=samples.slice(1).flatMap((sample,index)=>{
@@ -180,14 +182,14 @@ export function pathDeckTriangles(project:EventProject,selected:string|null):Dec
         }
       }
       if(section.type==='bridge'){
-        const beam=(first:number[],last:number[],thickness:number,segment:number,shade=.72)=>{
+        const beam=(first:number[],last:number[],thickness:number,segment:number,shade=.72,material=railingColor)=>{
           const axis=[last[0]-first[0],last[1]-first[1],last[2]-first[2]],length=Math.hypot(...axis);if(length<1e-5)return;
           axis.forEach((value,index)=>axis[index]=value/length);
           const reference=Math.abs(axis[2])>.9?[0,1,0]:[0,0,1],u=[axis[1]*reference[2]-axis[2]*reference[1],axis[2]*reference[0]-axis[0]*reference[2],axis[0]*reference[1]-axis[1]*reference[0]],uLength=Math.hypot(...u);u.forEach((value,index)=>u[index]=value/uLength);
           const v=[axis[1]*u[2]-axis[2]*u[1],axis[2]*u[0]-axis[0]*u[2],axis[0]*u[1]-axis[1]*u[0]],radius=thickness/2;
           const corners=[first,last].map(center=>[[-1,-1],[1,-1],[1,1],[-1,1]].map(([a,b])=>center.map((value,index)=>value+u[index]*a*radius+v[index]*b*radius)));
-          for(let side=0;side<4;side++){const next=(side+1)%4;add(corners[0][side],corners[0][next],corners[1][side],shade,segment);add(corners[0][next],corners[1][next],corners[1][side],shade,segment);}
-          add(corners[0][0],corners[1][0],corners[1][1],shade,segment);add(corners[0][0],corners[1][1],corners[0][1],shade,segment);add(corners[0][3],corners[1][3],corners[1][2],shade,segment);add(corners[0][3],corners[1][2],corners[0][2],shade,segment);
+          for(let side=0;side<4;side++){const next=(side+1)%4;add(corners[0][side],corners[0][next],corners[1][side],shade,segment,material);add(corners[0][next],corners[1][next],corners[1][side],shade,segment,material);}
+          add(corners[0][0],corners[1][0],corners[1][1],shade,segment,material);add(corners[0][0],corners[1][1],corners[0][1],shade,segment,material);add(corners[0][3],corners[1][3],corners[1][2],shade,segment,material);add(corners[0][3],corners[1][2],corners[0][2],shade,segment,material);
         };
 
         const lengths=samples.slice(1).map((sample,index)=>Math.hypot(sample.position[0]-samples[index].position[0],sample.position[1]-samples[index].position[1]));
@@ -207,9 +209,9 @@ export function pathDeckTriangles(project:EventProject,selected:string|null):Dec
             const tops=corners.map(point=>[point[0],point[1],height]),segment=samples[sampleIndex].section;
             for(let side=0;side<4;side++){
               const next=(side+1)%4,shade=side%2===0?.55:.7;
-              add(corners[side],corners[next],tops[side],shade,segment);add(corners[next],tops[next],tops[side],shade,segment);
+              add(corners[side],corners[next],tops[side],shade,segment,supportColor);add(corners[next],tops[next],tops[side],shade,segment,supportColor);
             }
-            add(tops[0],tops[1],tops[2],.8,segment);add(tops[0],tops[2],tops[3],.8,segment);
+            add(tops[0],tops[1],tops[2],.8,segment,supportColor);add(tops[0],tops[2],tops[3],.8,segment,supportColor);
           }
         }
         for(const edge of bridgeRailEdges(samples,path.width)){

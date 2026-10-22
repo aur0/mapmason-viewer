@@ -1,4 +1,4 @@
-import { objectIconInk, objectIcons } from './objectIcons';
+import { objectIconInk, MapObjectIcon } from './objectIcons';
 import ShareMap from './ShareMap';
 import { visitorProject } from './routeStops';
 import { createPathNetwork, shortestRoute } from './routing';
@@ -14,7 +14,7 @@ import './map-labels.css';
 import './viewer.css';
 
 const noop = () => {};
-function Viewer({ project, accent, logo, backgroundMap }: { project: EventProject; accent: string; logo?: string; backgroundMap: boolean }) {
+function Viewer({ project, accent, logo, backgroundMap, terrain }: { project: EventProject; accent: string; logo?: string; backgroundMap: boolean; terrain: boolean }) {
   const actions = useRef<MapActions | null>(null);
   const [sharing,setSharing]=useState(false);
   const closeShare=useCallback(()=>setSharing(false),[]);
@@ -77,7 +77,7 @@ function Viewer({ project, accent, logo, backgroundMap }: { project: EventProjec
   },[network,routeFrom,routeTo,gpsFix,routingActive,project]);
   return <div className="visitor-app" style={{ '--accent': accent } as React.CSSProperties}>
     <main className="visitor-map" aria-label={project.name}>
-      <MapCanvas onManualInteraction={pauseLock} route={routeResult.route} onPosition={setGpsFix} gps onLocationError={message=>{setGpsError(message);if(message)setGpsFix(null);}} project={project} mode={mode} selected={selectedPlace} tool="preview" reference={backgroundMap} ground={project.layout !== 'route' && project.layout !== 'blank'} boundary={project.layout==='site'} groundVertex={null} grid={false} labels={true} draft={[]} target={null} pathVertex={null} actions={actions} onBoxSelect={noop} onGroundSelect={noop} onGroundMove={noop} onGroundInsert={noop} onGroundRemove={noop} onConnect={noop} onBridgeBranchAt={noop} onPathSegmentSelect={noop} onClick={(_at,id)=>selectMapPlace(id)} onMove={noop} onPathMove={noop} onPathInsert={noop} onPathRemove={noop} onPathBranchAt={noop} onPathSelect={noop} onCursor={noop} onError={() => setError('The background map could not load. Check your internet connection.')} />
+      <MapCanvas onManualInteraction={pauseLock} route={routeResult.route} onPosition={setGpsFix} gps onLocationError={message=>{setGpsError(message);if(message)setGpsFix(null);}} project={project} mode={mode} terrain={terrain} selected={selectedPlace} tool="preview" reference={backgroundMap} ground={project.layout !== 'route' && project.layout !== 'blank'} boundary={project.layout==='site'} groundVertex={null} grid={false} labels={true} draft={[]} target={null} pathVertex={null} actions={actions} onBoxSelect={noop} onGroundSelect={noop} onGroundMove={noop} onGroundInsert={noop} onGroundRemove={noop} onConnect={noop} onBridgeBranchAt={noop} onPathSegmentSelect={noop} onClick={(_at,id)=>selectMapPlace(id)} onMove={noop} onPathMove={noop} onPathInsert={noop} onPathRemove={noop} onPathBranchAt={noop} onPathSelect={noop} onCursor={noop} onError={() => setError('The background map could not load. Check your internet connection.')} />
     </main>
     <button className="visitor-header" aria-label="Share this map" onClick={()=>{setPlaces(false);setRoutingOpen(false);setSharing(true);}}>{logo ? <img src={logo} alt=""/> : <span className="visitor-mark"><MapPin size={23}/></span>}<div><span className="visitor-event-name">{project.name}</span></div><QrCode className="visitor-share-hint" size={18} aria-hidden="true"/></button>
     <div className="view-switch visitor-views" aria-label="Map view">{(['2d', '3d'] as const).map(value => <button key={value} aria-pressed={mode === value} className={mode === value ? 'active' : ''} onClick={() => setMode(value)}>{value.toUpperCase()}</button>)}</div>
@@ -95,7 +95,7 @@ function Viewer({ project, accent, logo, backgroundMap }: { project: EventProjec
       {routeResult.route && <p role="status"><strong>{Math.round(routeResult.route.distance)} m along paths</strong>{routeResult.route.accessDistance>1 && <span> + {Math.round(routeResult.route.accessDistance)} m to/from paths</span>}</p>}
       <p>Solid blue follows connected paths. Dashed links to places are straight-line connections; check access on the ground. Crossings connect only at shared path points.</p>
     </aside>}
-    {places && <aside className="visitor-places"><header><h2>Places</h2><button aria-label="Close places" onClick={() => setPlaces(false)}><X size={19}/></button></header><input aria-label="Search places" placeholder="Stage, toilets, water…" value={search} onChange={e => setSearch(e.target.value)}/><div>{visitorObjects.filter(o => `${o.name} ${objectTypeLabel(o)}`.toLowerCase().includes(search.toLowerCase())).map(o => {const Icon=objectIcons[o.kind];return <button key={o.id} onClick={() => { pauseLock(); actions.current?.locate(o.position,{preserveZoom:true,from:gpsFix&&Date.now()-gpsFix.timestamp<=60000?[gpsFix.coords.longitude,gpsFix.coords.latitude]:undefined,pointTowards:true}); selectMapPlace(o.id); setPlaces(false); }}><span className="visitor-place-icon" style={{ background: kinds[o.kind].color, color:objectIconInk(o.kind) }}><Icon size={18}/></span><strong>{o.name}</strong><small>{objectTypeLabel(o)}</small></button>;})}{!visitorObjects.some(o => `${o.name} ${objectTypeLabel(o)}`.toLowerCase().includes(search.toLowerCase())) && <p>No places found.</p>}</div></aside>}
+    {places && <aside className="visitor-places"><header><h2>Places</h2><button aria-label="Close places" onClick={() => setPlaces(false)}><X size={19}/></button></header><input aria-label="Search places" placeholder="Stage, toilets, water…" value={search} onChange={e => setSearch(e.target.value)}/><div>{visitorObjects.filter(o => `${o.name} ${objectTypeLabel(o)}`.toLowerCase().includes(search.toLowerCase())).map(o => <button key={o.id} onClick={() => { pauseLock(); actions.current?.locate(o.position,{preserveZoom:true,from:gpsFix&&Date.now()-gpsFix.timestamp<=60000?[gpsFix.coords.longitude,gpsFix.coords.latitude]:undefined,pointTowards:true}); selectMapPlace(o.id); setPlaces(false); }}><span className="visitor-place-icon" style={{ background: kinds[o.kind].color, color:objectIconInk(o.kind) }}><MapObjectIcon kind={o.kind} customIcon={o.customIcon} size={18}/></span><strong>{o.name}</strong><small>{objectTypeLabel(o)}</small></button>)}{!visitorObjects.some(o => `${o.name} ${objectTypeLabel(o)}`.toLowerCase().includes(search.toLowerCase())) && <p>No places found.</p>}</div></aside>}
     {quickRouting && routingActive && !routingOpen && gpsFix && routeResult.error && <div className="visitor-error" role="alert">{routeResult.error}<button aria-label="Dismiss route message" onClick={()=>{setRoutingActive(false);setQuickRouting(false);}}><X size={15}/></button></div>}
     {gpsError && <div className="visitor-gps-error" role="alert">{gpsError}<button aria-label="Dismiss GPS message" onClick={() => setGpsError('')}><X size={15}/></button></div>}
     {error && <div className="visitor-error" role="status">{error}<button aria-label="Dismiss message" onClick={() => setError('')}><X size={15}/></button></div>}
@@ -118,7 +118,7 @@ async function start() {
     const accent = /^#[a-f0-9]{6}$/i.test(data.accent) ? data.accent : '#c4ed9c';
     const logo = typeof data.logo === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(data.logo) ? data.logo : undefined;
     document.title = project.name;
-    root.render(<Viewer project={project} accent={accent} logo={logo} backgroundMap={typeof data.backgroundMap === 'boolean' ? data.backgroundMap : project.layout === 'route'}/>);
+    root.render(<Viewer project={project} accent={accent} logo={logo} backgroundMap={typeof data.backgroundMap === 'boolean' ? data.backgroundMap : project.layout === 'route'} terrain={typeof data.terrain === 'boolean' ? data.terrain : true}/>);
   } catch (error) {
     root.render(<div className="visitor-failure"><h1>Map unavailable</h1><p>{error instanceof Error ? error.message : 'Could not open this map.'}</p><p>Serve this folder from a website host or local HTTP server.</p></div>);
   }

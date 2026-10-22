@@ -23,12 +23,13 @@ export function segmentLengthLabel(a:Coord,b:Coord):string{
 
 export function drawingPreview(tool:string,points:Coord[],cursor:Coord|null,extensionOrigin?:Coord,types?:PathType[],nextType:PathType='standard'):{draft:FeatureCollection;preview:FeatureCollection}{
   const draft:Feature[]=[],preview:Feature[]=[],boundary=isBoundaryTool(tool);
-  if(tool!=='path'&&tool!=='bridge'&&tool!=='underpass'&&!boundary&&!tool.startsWith('extend-'))return {draft:{type:'FeatureCollection',features:[]},preview:{type:'FeatureCollection',features:[]}};
+  if(tool!=='path'&&tool!=='wall'&&tool!=='bridge'&&tool!=='underpass'&&!boundary&&!tool.startsWith('extend-'))return {draft:{type:'FeatureCollection',features:[]},preview:{type:'FeatureCollection',features:[]}};
   const same=(a:Coord,b:Coord)=>a[0]===b[0]&&a[1]===b[1];
   const origin=extensionOrigin??points.at(-1);
-  if(origin&&cursor&&!same(origin,cursor))preview.push({type:'Feature',properties:{segmentType:tool==='bridge'?'bridge':tool==='underpass'?'underpass':nextType},geometry:{type:'LineString',coordinates:[origin,cursor]}});
+  if(origin&&cursor&&!same(origin,cursor))preview.push({type:'Feature',properties:{segmentType:tool==='wall'?'wall':tool==='bridge'?'bridge':tool==='underpass'?'underpass':nextType},geometry:{type:'LineString',coordinates:[origin,cursor]}});
   if(points.length>1){
-    if(tool==='bridge'||tool==='underpass')for(let index=1;index<points.length;index++)draft.push({type:'Feature',properties:{segmentType:tool},geometry:{type:'LineString',coordinates:[points[index-1],points[index]]}});
+    if(tool==='wall')draft.push({type:'Feature',properties:{segmentType:'wall'},geometry:{type:'LineString',coordinates:points}});
+    else if(tool==='bridge'||tool==='underpass')for(let index=1;index<points.length;index++)draft.push({type:'Feature',properties:{segmentType:tool},geometry:{type:'LineString',coordinates:[points[index-1],points[index]]}});
     else if(tool==='path'&&types?.some(type=>type!=='standard'))for(let index=1;index<points.length;index++)draft.push({type:'Feature',properties:{segmentType:types[index-1]??'standard'},geometry:{type:'LineString',coordinates:[points[index-1],points[index]]}});
     else draft.push({type:'Feature',properties:{},geometry:{type:'LineString',coordinates:points}});
   }

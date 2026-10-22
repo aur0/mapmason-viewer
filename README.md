@@ -35,7 +35,7 @@ npm run verify -- path/to/extracted-website
 
 The verifier compares actual JavaScript/CSS with your **local build**, not hashes supplied by the downloaded map. The map name, geometry, logo and colours can differ. For HTML it also checks for exactly one bundled module script. This is an asset comparison, not a complete security audit: inspect host HTML, extra resources, service workers, HTTP headers and network activity separately. Matching self-reported metadata alone is not proof. Builds have been compared locally on Windows; use the same Node version and lockfile when comparing. Other OS/toolchain versions have not been claimed byte-identical.
 
-Open browser developer tools, preserve the Network log, and exercise GPS, sensors, routes, search and sharing. With backgroundMap:false there should be no tile/font requests. With a background enabled, the provider receives requests for the viewed area. See PRIVACY.md.
+Open browser developer tools, preserve the Network log, and exercise GPS, sensors, routes, search and sharing. With backgroundMap:false there should be no OpenFreeMap tile/font requests. With terrain:false there should be no Mapterhorn requests, including after switching to 3D. When enabled, each provider receives requests for the viewed area. See PRIVACY.md.
 
 ## Important files
 
